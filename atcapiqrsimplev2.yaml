@@ -1,0 +1,236 @@
+info:
+  description: API de SIMPLE para generación de QR de pago y consulta de estado del QR.
+  title: ATC.API.QR.SIMPLE.V2
+  version: "2"
+paths:
+  /cancel/{numeroReferencia}:
+    parameters:
+      - schema:
+          type: string
+        description: numeroReferencia
+        in: path
+        name: numeroReferencia
+        required: true
+    post:
+      description: Cancelar un qr vigente
+      responses:
+        "200":
+          description: OK
+      summary: Cancelar un qr vigente
+      x-api-broken: false
+      x-destination: $acclQrApiBaseUrlV2/api/v2/anular/qr/{numeroReferencia}
+      x-interceptors:
+        "14":
+          x-interceptor-content: '{"acceptedTerms":true,"encryptContent":false,"encryptPathAndParameters":false,"ignoreBodyValidationMultiPartFormData":false}'
+          x-interceptor-execution-point: FIRST
+          x-interceptor-position: 1
+          x-interceptor-status: REFERENCE
+          x-interceptor-type: LOG
+        "15":
+          x-interceptor-content: '{"location":"HEADER","name":"transaction_id_atc","ignoreBodyValidationMultiPartFormData":false}'
+          x-interceptor-execution-point: FIRST
+          x-interceptor-position: 2
+          x-interceptor-status: REFERENCE
+          x-interceptor-type: TRANSACTION_ID
+        "16":
+          x-interceptor-content: '{"location":"HEADER_OR_COOKIE","name":"Sensedia-Auth","grantTypes":["CLIENT_CREDENTIALS"],"ignoreBodyValidationMultiPartFormData":false}'
+          x-interceptor-execution-point: FIRST
+          x-interceptor-position: 3
+          x-interceptor-status: REFERENCE
+          x-interceptor-type: OAUTH
+        "17":
+          x-interceptor-content: '{"httpStatus":"200","ignoreBodyValidationMultiPartFormData":false}'
+          x-interceptor-execution-point: SECOND
+          x-interceptor-position: 4
+          x-interceptor-status: REFERENCE
+          x-interceptor-type: BILLING_HIT
+        "18":
+          x-interceptor-content: '{"httpStatus":"409","ignoreBodyValidationMultiPartFormData":false}'
+          x-interceptor-execution-point: SECOND
+          x-interceptor-position: 5
+          x-interceptor-status: REFERENCE
+          x-interceptor-type: BILLING_HIT
+        "19":
+          x-interceptor-content: '{"acceptedTerms":true,"encryptContent":false,"encryptPathAndParameters":false,"ignoreBodyValidationMultiPartFormData":false}'
+          x-interceptor-execution-point: SECOND
+          x-interceptor-position: 6
+          x-interceptor-status: REFERENCE
+          x-interceptor-type: LOG
+      x-resource-name: Recurso Qr
+      x-timeout: null
+  /generate:
+    post:
+      description: Generar de QR
+      responses:
+        "200":
+          description: OK
+      summary: Generar de QR
+      x-api-broken: false
+      x-destination: $acclQrApiBaseUrlV2/api/v2/generar/qr
+      x-interceptors:
+        "7":
+          x-interceptor-content: '{"acceptedTerms":true,"encryptContent":false,"encryptPathAndParameters":false,"ignoreBodyValidationMultiPartFormData":false}'
+          x-interceptor-execution-point: FIRST
+          x-interceptor-position: 1
+          x-interceptor-status: REFERENCE
+          x-interceptor-type: LOG
+        "8":
+          x-interceptor-content: '{"location":"HEADER","name":"transaction_id_atc","ignoreBodyValidationMultiPartFormData":false}'
+          x-interceptor-execution-point: FIRST
+          x-interceptor-position: 2
+          x-interceptor-status: REFERENCE
+          x-interceptor-type: TRANSACTION_ID
+        "9":
+          x-interceptor-content: '{"id":35,"name":"ATC - Validación  de Request Simple
+            v2","script":"// Interceptor ATC - Request\r\n// Valida que
+            nombreEstablecimiento no contenga caracteres especiales.\r\n\r\nvar
+            REGEX_NOMBRE = /^[A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ ]+$/;\r\n\r\ntry
+            {\r\n    var bodyStr =
+            $call.request.getBody().getString(\"utf-8\");\r\n\r\n    if
+            (!bodyStr || String(bodyStr).trim() === \"\")
+            {\r\n        responseError(400, \"nombreEstablecimiento\", \"El body
+            del request es obligatorio\", \"REQUIRED_FIELD\");\r\n    } else
+            {\r\n        var nombre =
+            JSON.parse(bodyStr).nombreEstablecimiento;\r\n\r\n        if (nombre
+            === undefined || nombre === null || String(nombre).trim() === \"\")
+            {\r\n            responseError(400, \"nombreEstablecimiento\", \"El
+            campo nombreEstablecimiento es obligatorio\",
+            \"REQUIRED_FIELD\");\r\n        } else if
+            (!REGEX_NOMBRE.test(String(nombre).trim()))
+            {\r\n            responseError(400, \"nombreEstablecimiento\", \"El
+            nombreEstablecimiento no admite caracteres especiales\",
+            \"INVALID_FORMAT\");\r\n        }\r\n    }\r\n} catch (ex)
+            {\r\n    responseError(400, \"body\", \"El body del request no es un
+            JSON válido\", \"INVALID_JSON\");\r\n}\r\n\r\n//
+            ------------------------------------------------------\r\n\r\nfunction
+            responseError(statusCode, field, message, code) {\r\n    var payload
+            = {\r\n        success: false,\r\n        message: \"Error de
+            validación\",\r\n        errors: [{\r\n            field:
+            String(field),\r\n            message:
+            String(message),\r\n            code:
+            String(code)\r\n        }]\r\n    };\r\n\r\n    $call.tracer.trace(\">>
+            [ATC][REQ] BLOQUEO: \" + field + \" - \" +
+            code);\r\n\r\n    interruptFlow();\r\n    $call.response.setStatus(statusCode);\r\n    $call.response.getBody().setString(JSON.stringify(payload),
+            \"utf-8\");\r\n    $call.response.setHeader(\"Content-Type\",
+            \"application/json\");\r\n}\r\n\r\nfunction interruptFlow()
+            {\r\n    $call.response = new
+            com.sensedia.interceptor.externaljar.dto.ApiResponse();\r\n    $call.stopFlow
+            =
+            true;\r\n    $call.decision.setAccept(false);\r\n}","abort":false,"debug":false,"visibility":{"id":242,"visibilityType":"ORGANIZATION","owner":{"id":8,"name":"Wilmer
+            Quispe","email":"wquispe@redenlace.com.bo","login":"wquispe@redenlace.com.bo","roles":[{"id":-1,"name":"Super
+            Admin","description":"Super users are able to do anything with the
+            system features. Use it
+            wisely.","permissions":[{"id":206,"permission":"DASHBOARD","type":"VIEW"},{"id":207,"permission":"ANALYTICS","type":"VIEW"},{"id":208,"permission":"APIS_HEALTH","type":"VIEW"},{"id":209,"permission":"APIS","type":"VIEW"},{"id":211,"permission":"NOTIFICATIONS","type":"VIEW"},{"id":212,"permission":"PLANS","type":"VIEW"},{"id":213,"permission":"APPS","type":"VIEW"},{"id":214,"permission":"ACCESS_TOKENS","type":"VIEW"},{"id":215,"permission":"SECRETS","type":"VIEW"},{"id":216,"permission":"DEVELOPERS","type":"VIEW"},{"id":217,"permission":"TRACE","type":"VIEW"},{"id":218,"permission":"ENVIRONMENTS","type":"VIEW"},{"id":219,"permission":"CALLBACKS","type":"VIEW"},{"id":220,"permission":"HEALTH_CHECKS","type":"VIEW"},{"id":221,"permission":"USERS","type":"VIEW"},{"id":222,"permission":"ROLES","type":"VIEW"},{"id":223,"permission":"TEAMS","type":"VIEW"},{"id":224,"permission":"AUDIT","type":"VIEW"},{"id":225,"permission":"OAUTH","type":"VIEW"},{"id":226,"permission":"LDAP","type":"VIEW"},{"id":227,"permission":"ORGANIZATIONS","type":"VIEW"},{"id":228,"permission":"TRACE_DECRYPT","type":"VIEW"},{"id":229,"permission":"MFA","type":"VIEW"},{"id":230,"permission":"CERTIFICATE","type":"VIEW"},{"id":231,"permission":"ALERT","type":"VIEW"},{"id":232,"permission":"MAIL_SETTINGS","type":"VIEW"},{"id":233,"permission":"ANALYTICS","type":"EDIT"},{"id":234,"permission":"APIS_HEALTH","type":"EDIT"},{"id":235,"permission":"APIS","type":"EDIT"},{"id":237,"permission":"NOTIFICATIONS","type":"EDIT"},{"id":238,"permission":"PLANS","type":"EDIT"},{"id":239,"permission":"APPS","type":"EDIT"},{"id":240,"permission":"ACCESS_TOKENS","type":"EDIT"},{"id":241,"permission":"SECRETS","type":"EDIT"},{"id":242,"permission":"DEVELOPERS","type":"EDIT"},{"id":243,"permission":"TRACE","type":"EDIT"},{"id":244,"permission":"ENVIRONMENTS","type":"EDIT"},{"id":245,"permission":"CALLBACKS","type":"EDIT"},{"id":246,"permission":"HEALTH_CHECKS","type":"EDIT"},{"id":247,"permission":"USERS","type":"EDIT"},{"id":248,"permission":"ROLES","type":"EDIT"},{"id":249,"permission":"TEAMS","type":"EDIT"},{"id":250,"permission":"AUDIT","type":"EDIT"},{"id":251,"permission":"OAUTH","type":"EDIT"},{"id":252,"permission":"LDAP","type":"EDIT"},{"id":253,"permission":"ORGANIZATIONS","type":"EDIT"},{"id":254,"permission":"TRACE_DECRYPT","type":"EDIT"},{"id":255,"permission":"MFA","type":"EDIT"},{"id":256,"permission":"CERTIFICATE","type":"EDIT"},{"id":257,"permission":"ALERT","type":"EDIT"},{"id":258,"permission":"MAIL_SETTINGS","type":"EDIT"},{"id":261,"permission":"DATA_OBFUSCATION","type":"EDIT"},{"id":262,"permission":"CACHE_CONTROL","type":"VIEW"},{"id":263,"permission":"CACHE_CONTROL","type":"EDIT"},{"id":264,"permission":"ATTRIBUTES","type":"EDIT"},{"id":265,"permission":"ATTRIBUTES","type":"VIEW"},{"id":270,"permission":"WORKFLOW","type":"EDIT"},{"id":271,"permission":"WORKFLOW","type":"VIEW"},{"id":276,"permission":"IMPACT_ANALYSIS","type":"EDIT"},{"id":277,"permission":"IMPACT_ANALYSIS","type":"VIEW"},{"id":285,"permission":"API_CONNECTORS","type":"VIEW"},{"id":286,"permission":"API_CONNECTORS","type":"EDIT"},{"id":289,"permission":"INBOUND_ADDRESS","type":"VIEW"},{"id":290,"permission":"INBOUND_ADDRESS","type":"EDIT"},{"id":293,"permission":"EVENTS_HUB","type":"VIEW"},{"id":294,"permission":"EVENTS_HUB","type":"EDIT"},{"id":298,"permission":"OPEN_BANKING","type":"VIEW"},{"id":299,"permission":"OPEN_BANKING","type":"EDIT"},{"id":302,"permission":"INTEGRATIONS","type":"VIEW"},{"id":303,"permission":"INTEGRATIONS","type":"EDIT"}]},{"id":2,"name":"API
+            Developer","description":"People with \"API Developer\" role can
+            build and maintain APIs, to document APIs and integrate with backend
+            systems","permissions":[{"id":44,"permission":"DASHBOARD","type":"VIEW"},{"id":45,"permission":"ANALYTICS","type":"VIEW"},{"id":46,"permission":"APIS_HEALTH","type":"VIEW"},{"id":47,"permission":"APIS","type":"VIEW"},{"id":49,"permission":"NOTIFICATIONS","type":"VIEW"},{"id":50,"permission":"PLANS","type":"VIEW"},{"id":51,"permission":"APPS","type":"VIEW"},{"id":52,"permission":"ACCESS_TOKENS","type":"VIEW"},{"id":53,"permission":"TRACE","type":"VIEW"},{"id":54,"permission":"ENVIRONMENTS","type":"VIEW"},{"id":55,"permission":"CALLBACKS","type":"VIEW"},{"id":56,"permission":"HEALTH_CHECKS","type":"VIEW"},{"id":57,"permission":"USERS","type":"VIEW"},{"id":58,"permission":"TEAMS","type":"VIEW"},{"id":59,"permission":"AUDIT","type":"VIEW"},{"id":60,"permission":"OAUTH","type":"VIEW"},{"id":61,"permission":"APIS","type":"EDIT"},{"id":63,"permission":"NOTIFICATIONS","type":"EDIT"},{"id":64,"permission":"PLANS","type":"EDIT"},{"id":65,"permission":"APPS","type":"EDIT"},{"id":66,"permission":"ACCESS_TOKENS","type":"EDIT"},{"id":67,"permission":"CALLBACKS","type":"EDIT"},{"id":68,"permission":"HEALTH_CHECKS","type":"EDIT"},{"id":69,"permission":"OAUTH","type":"EDIT"},{"id":185,"permission":"ALERT","type":"VIEW"},{"id":203,"permission":"CERTIFICATE","type":"VIEW"},{"id":282,"permission":"WORKFLOW","type":"VIEW"},{"id":297,"permission":"EVENTS_HUB","type":"VIEW"}]},{"id":8,"name":"1.
+            ATC - SUPER ADMIN","description":"Administración total del API
+            Manager. Administra usuarios, roles y permisos. Configura seguridad
+            del APIM. Gestiona infraestructura del API Manager. Puede crear,
+            editar y desplegar APIs. Controla configuración global del
+            sistema.","permissions":[{"id":803,"permission":"ENVIRONMENTS","type":"VIEW"},{"id":804,"permission":"DATA_OBFUSCATION","type":"VIEW"},{"id":805,"permission":"ACCESS_TOKENS","type":"VIEW"},{"id":806,"permission":"CACHE_CONTROL","type":"VIEW"},{"id":807,"permission":"SECRETS","type":"VIEW"},{"id":808,"permission":"HEALTH_CHECKS","type":"VIEW"},{"id":809,"permission":"CERTIFICATE","type":"EDIT"},{"id":810,"permission":"OAUTH","type":"VIEW"},{"id":811,"permission":"DEVELOPERS","type":"VIEW"},{"id":812,"permission":"APIS_HEALTH","type":"EDIT"},{"id":813,"permission":"OPEN_BANKING","type":"EDIT"},{"id":814,"permission":"APIS_HEALTH","type":"VIEW"},{"id":815,"permission":"AUDIT","type":"EDIT"},{"id":816,"permission":"INTEGRATIONS","type":"VIEW"},{"id":817,"permission":"OPEN_BANKING","type":"VIEW"},{"id":818,"permission":"API_CONNECTORS","type":"EDIT"},{"id":819,"permission":"PLANS","type":"VIEW"},{"id":820,"permission":"CACHE_CONTROL","type":"EDIT"},{"id":821,"permission":"APPS","type":"EDIT"},{"id":822,"permission":"APPS","type":"VIEW"},{"id":823,"permission":"OAUTH","type":"EDIT"},{"id":824,"permission":"NOTIFICATIONS","type":"VIEW"},{"id":825,"permission":"APIS","type":"EDIT"},{"id":826,"permission":"TRACE","type":"VIEW"},{"id":827,"permission":"PLANS","type":"EDIT"},{"id":828,"permission":"EVENTS_HUB","type":"EDIT"},{"id":829,"permission":"ORGANIZATIONS","type":"EDIT"},{"id":830,"permission":"LDAP","type":"EDIT"},{"id":831,"permission":"TRACE_DECRYPT","type":"VIEW"},{"id":832,"permission":"ROLES","type":"EDIT"},{"id":833,"permission":"ANALYTICS","type":"VIEW"},{"id":834,"permission":"DATA_OBFUSCATION","type":"EDIT"},{"id":835,"permission":"API_CONNECTORS","type":"VIEW"},{"id":836,"permission":"TEAMS","type":"EDIT"},{"id":837,"permission":"ROLES","type":"VIEW"},{"id":838,"permission":"TEAMS","type":"VIEW"},{"id":839,"permission":"HEALTH_CHECKS","type":"EDIT"},{"id":840,"permission":"ORGANIZATIONS","type":"VIEW"},{"id":841,"permission":"MAIL_SETTINGS","type":"VIEW"},{"id":842,"permission":"APIS","type":"VIEW"},{"id":843,"permission":"ENVIRONMENTS","type":"EDIT"},{"id":844,"permission":"INTEGRATIONS","type":"EDIT"},{"id":845,"permission":"MFA","type":"EDIT"},{"id":846,"permission":"EVENTS_HUB","type":"VIEW"},{"id":847,"permission":"INBOUND_ADDRESS","type":"EDIT"},{"id":848,"permission":"NOTIFICATIONS","type":"EDIT"},{"id":849,"permission":"CALLBACKS","type":"EDIT"},{"id":850,"permission":"ALERT","type":"VIEW"},{"id":851,"permission":"ACCESS_TOKENS","type":"EDIT"},{"id":852,"permission":"AUDIT","type":"VIEW"},{"id":853,"permission":"DASHBOARD","type":"VIEW"},{"id":854,"permission":"LDAP","type":"VIEW"},{"id":855,"permission":"ALERT","type":"EDIT"},{"id":856,"permission":"MAIL_SETTINGS","type":"EDIT"},{"id":857,"permission":"USERS","type":"VIEW"},{"id":858,"permission":"CERTIFICATE","type":"VIEW"},{"id":859,"permission":"INBOUND_ADDRESS","type":"VIEW"},{"id":860,"permission":"CALLBACKS","type":"VIEW"},{"id":861,"permission":"ANALYTICS","type":"EDIT"},{"id":862,"permission":"USERS","type":"EDIT"}]}],"teams":[{"id":1,"name":"TEAM
+            SUPER
+            ADMIN","description":null,"creationDate":null,"users":[],"usersCount":2}],"hasAllPermissions":false,"userType":"DATABASE","traceEnvironments":[],"mfaSecret":false,"loginAttempts":0,"status":"ACTIVE","lastLogin":1785863246000},"users":[]},"tags":["ATC
+            - Utilities"],"ignoreBodyValidationMultiPartFormData":false}'
+          x-interceptor-custom-interceptor-id: 35
+          x-interceptor-execution-point: FIRST
+          x-interceptor-position: 3
+          x-interceptor-status: REFERENCE
+          x-interceptor-type: CUSTOM
+        "10":
+          x-interceptor-content: '{"location":"HEADER_OR_COOKIE","name":"Sensedia-Auth","grantTypes":["CLIENT_CREDENTIALS"],"ignoreBodyValidationMultiPartFormData":false}'
+          x-interceptor-execution-point: FIRST
+          x-interceptor-position: 4
+          x-interceptor-status: REFERENCE
+          x-interceptor-type: OAUTH
+        "11":
+          x-interceptor-content: '{"httpStatus":"200","ignoreBodyValidationMultiPartFormData":false}'
+          x-interceptor-execution-point: SECOND
+          x-interceptor-position: 5
+          x-interceptor-status: REFERENCE
+          x-interceptor-type: BILLING_HIT
+        "12":
+          x-interceptor-content: '{"httpStatus":"409","ignoreBodyValidationMultiPartFormData":false}'
+          x-interceptor-execution-point: SECOND
+          x-interceptor-position: 6
+          x-interceptor-status: REFERENCE
+          x-interceptor-type: BILLING_HIT
+        "13":
+          x-interceptor-content: '{"acceptedTerms":true,"encryptContent":false,"encryptPathAndParameters":false,"ignoreBodyValidationMultiPartFormData":false}'
+          x-interceptor-execution-point: SECOND
+          x-interceptor-position: 7
+          x-interceptor-status: REFERENCE
+          x-interceptor-type: LOG
+      x-resource-name: Recurso Qr
+      x-timeout: null
+  /verify/{numeroReferencia}:
+    get:
+      description: Consultar de estado de la transaccion qr
+      responses:
+        "200":
+          description: OK
+      summary: Consultar de estado de la transaccion qr
+      x-api-broken: true
+      x-destination: $acclQrApiBaseUrlV2/api/v2/estado/qr/{numeroReferencia}
+      x-interceptors:
+        "1":
+          x-interceptor-content: '{"acceptedTerms":true,"encryptContent":false,"encryptPathAndParameters":false,"ignoreBodyValidationMultiPartFormData":false}'
+          x-interceptor-execution-point: FIRST
+          x-interceptor-position: 1
+          x-interceptor-status: REFERENCE
+          x-interceptor-type: LOG
+        "2":
+          x-interceptor-content: '{"location":"HEADER","name":"transaction_id_atc","ignoreBodyValidationMultiPartFormData":false}'
+          x-interceptor-execution-point: FIRST
+          x-interceptor-position: 2
+          x-interceptor-status: REFERENCE
+          x-interceptor-type: TRANSACTION_ID
+        "3":
+          x-interceptor-content: '{"location":"HEADER_OR_COOKIE","name":"Sensedia-Auth","grantTypes":["CLIENT_CREDENTIALS"],"ignoreBodyValidationMultiPartFormData":false}'
+          x-interceptor-execution-point: FIRST
+          x-interceptor-position: 3
+          x-interceptor-status: REFERENCE
+          x-interceptor-type: OAUTH
+        "4":
+          x-interceptor-content: '{"httpStatus":"200","ignoreBodyValidationMultiPartFormData":false}'
+          x-interceptor-execution-point: SECOND
+          x-interceptor-position: 4
+          x-interceptor-status: REFERENCE
+          x-interceptor-type: BILLING_HIT
+        "5":
+          x-interceptor-content: '{"httpStatus":"409","ignoreBodyValidationMultiPartFormData":false}'
+          x-interceptor-execution-point: SECOND
+          x-interceptor-position: 5
+          x-interceptor-status: REFERENCE
+          x-interceptor-type: BILLING_HIT
+        "6":
+          x-interceptor-content: '{"acceptedTerms":true,"encryptContent":false,"encryptPathAndParameters":false,"ignoreBodyValidationMultiPartFormData":false}'
+          x-interceptor-execution-point: SECOND
+          x-interceptor-position: 6
+          x-interceptor-status: REFERENCE
+          x-interceptor-type: LOG
+      x-resource-name: Recurso Qr
+      x-timeout: null
+    parameters:
+      - schema:
+          type: string
+        description: numeroReferencia
+        in: path
+        name: numeroReferencia
+        required: true
+x-access-token-expires-in: null
+x-api-broken: false
+x-destination: null
+x-interceptors: {}
+x-life-cycle: AVAILABLE
+x-resources:
+  Recurso Qr:
+    x-api-broken: false
+    x-destination: null
+    x-interceptors: {}
+    x-resource-description: Generar QR y consulta V2
+    x-timeout: null
+x-timeout: null
+openapi: 3.1.1
+servers:
+  - url: /qr/simple/v2
