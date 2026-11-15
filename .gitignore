@@ -34,3 +34,9 @@ logs/
 .DS_Store
 .idea/
 .vscode/
+
+# Configuración local FTP
+.vscode/sftp.json
+
+# Metadatos generados por cPanel/FTP
+**/.ftpquota
