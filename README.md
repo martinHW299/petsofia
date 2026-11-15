@@ -11,9 +11,10 @@ RedEnlace. El código del módulo se encuentra en `modules/redenlace/`.
 
 ### Estado actual
 
-Está implementada la Fase 1: configuración administrativa y comprobación de
-autenticación OAuth para el entorno Sandbox. El módulo todavía no participa en
-el checkout ni crea códigos QR, pedidos o transacciones.
+Están implementadas la Fase 1 (configuración administrativa y comprobación de
+OAuth Sandbox) y una parte aislada de la Fase 2: el cliente de generación QR.
+El módulo todavía no participa en el checkout, no crea pedidos ni sincroniza
+estados de pago.
 
 Funcionalidad disponible:
 
@@ -22,6 +23,10 @@ Funcionalidad disponible:
 - Configuración de URL TEST/Sandbox, Client ID y Client Secret.
 - Botón **Probar conexión Sandbox**.
 - Resultado limitado a estado de autenticación, tipo de token y vigencia.
+- Cliente QR reutilizable para `POST /qr/simple/v2/generate`, con validación de
+  respuesta y de la imagen PNG Base64.
+- Acción manual protegida en Back Office para generar un QR Sandbox de prueba;
+  no interviene en checkout, pedidos ni confirmación de pagos.
 - Compatibilidad objetivo: PrestaShop 1.7.8.2 y PHP 7.4.
 
 ### Seguridad
@@ -41,7 +46,7 @@ Funcionalidad disponible:
 Las siguientes funcionalidades no están implementadas y no deben asumirse:
 
 - Método de pago visible durante el checkout.
-- Generación y presentación de códigos QR.
+- Presentación del QR dentro del checkout y persistencia de transacciones.
 - Persistencia de transacciones.
 - Callbacks o webhooks.
 - Verificación de pagos y actualización de estados de pedido.
@@ -57,11 +62,13 @@ modules/redenlace/
 ├── redenlace.php                         # Módulo y configuración Back Office
 ├── classes/
 │   ├── RedEnlaceOAuthClient.php           # Cliente OAuth reutilizable
+│   ├── RedEnlaceQRClient.php               # Cliente aislado de generación QR
 │   └── RedEnlaceSecretStorage.php         # Cifrado de secretos almacenados
 └── index.php
 
 docker/php74/Dockerfile                    # Entorno local PHP 7.4
 tests/test-oauth.php                       # Prueba local, no se despliega
+tests/test-qr-client.php                   # Pruebas simuladas QR, no se despliega
 artifacts/redenlace/                       # ZIP locales versionados, ignorados
 ```
 
