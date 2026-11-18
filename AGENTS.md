@@ -6,9 +6,9 @@ This repository contains `redenlace`, a custom QR payment module for PrestaShop 
 
 The module integrates with RedEnlace payment APIs. Its responsibilities include payment initiation, QR presentation, transaction tracking, payment confirmation, and PrestaShop order-state synchronization.
 
-Do not assume undocumented RedEnlace endpoints, authentication mechanisms, request parameters, callback signatures, or payment statuses. Consult [`atcapiqrsimplev2.yaml`](atcapiqrsimplev2.yaml) before implementation; it is the repository's technical reference for the **ATC.API.QR.SIMPLE.V2** RedEnlace API.
+Do not assume undocumented RedEnlace endpoints, authentication mechanisms, request parameters, callback signatures, or payment statuses. Consult [`RedEnlace_QR_Simple_V2_Implementacion_PrestaShop.md`](modules/redenlace/docs/RedEnlace_QR_Simple_V2_Implementacion_PrestaShop.md) before implementation; it is the repository's technical reference for the **ATC.API.QR.SIMPLE.V2** RedEnlace API.
 
-Before changing QR creation, status checks, callbacks, authentication, request fields, or error handling, verify the applicable endpoint, schema, required fields, response codes, and security requirements in that YAML. Do not infer API behavior from UI requirements, and never hard-code credentials, tokens, merchant IDs, or callback URLs.
+Before changing QR creation, status checks, callbacks, authentication, request fields, or error handling, verify the applicable endpoint, schema, required fields, response codes, and security requirements in that documentation. Do not infer API behavior from UI requirements, and never hard-code credentials, tokens, merchant IDs, or callback URLs.
 
 ## 2. Compatibility Requirements
 

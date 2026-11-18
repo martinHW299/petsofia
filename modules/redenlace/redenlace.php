@@ -1,4 +1,3 @@
-
 <?php
 
 if (!defined('_PS_VERSION_')) {
@@ -11,429 +10,243 @@ require_once __DIR__ . '/classes/RedEnlaceSecretStorage.php';
 
 class Redenlace extends PaymentModule
 {
-    const CONFIG_SANDBOX_BASE_URL = 'REDENLACE_SANDBOX_BASE_URL';
-    const CONFIG_SANDBOX_CLIENT_ID = 'REDENLACE_SANDBOX_CLIENT_ID';
-    const CONFIG_SANDBOX_CLIENT_SECRET = 'REDENLACE_SANDBOX_CLIENT_SECRET';
+    const CONFIG_ENABLED = 'REDENLACE_ENABLED';
+    const CONFIG_ENVIRONMENT = 'REDENLACE_ENVIRONMENT';
+    const CONFIG_CLIENT_ID = 'REDENLACE_CLIENT_ID';
+    const CONFIG_CLIENT_SECRET = 'REDENLACE_CLIENT_SECRET';
     const CONFIG_ESTABLISHMENT_ID = 'REDENLACE_ESTABLISHMENT_ID';
     const CONFIG_ESTABLISHMENT_NAME = 'REDENLACE_ESTABLISHMENT_NAME';
+    const CONFIG_QR_VALIDITY = 'REDENLACE_QR_VALIDITY';
     const CONFIG_WEBHOOK_URL = 'REDENLACE_WEBHOOK_URL';
     const CONFIG_WEBHOOK_KEY = 'REDENLACE_WEBHOOK_KEY';
     const CONFIG_WEBHOOK_VALUE = 'REDENLACE_WEBHOOK_VALUE';
-    const CONFIG_QR_TEST_LOCK = 'REDENLACE_QR_TEST_LOCK';
-    const CONFIG_QR_TEST_RESULT_PREFIX = 'REDENLACE_QR_TEST_RESULT_';
+    const SANDBOX_BASE_URL = 'https://atcgwapitest.redenlace.com.bo/sandbox/';
+    const PRODUCTION_BASE_URL = 'https://api.redenlace.com.bo/';
 
     public function __construct()
     {
         $this->name = 'redenlace';
         $this->tab = 'payments_gateways';
-        $this->version = '0.1.0';
+        $this->version = '0.2.0';
         $this->author = 'LogicaTI';
         $this->need_instance = 0;
         $this->bootstrap = true;
-
         parent::__construct();
-
-        $this->displayName = $this->l('RedEnlace QR');
-        $this->description = $this->l(
-            'Modulo de pagos QR mediante RedEnlace.'
-        );
-
-        $this->ps_versions_compliancy = array(
-            'min' => '1.7.8.0',
-            'max' => '1.7.8.99'
-        );
+        $this->displayName = $this->l('RedEnlace QR Simple');
+        $this->description = $this->l('Pagos QR mediante RedEnlace.');
+        $this->ps_versions_compliancy = array('min' => '1.7.8.0', 'max' => '1.7.8.99');
     }
 
     public function install()
     {
         return parent::install()
-            && Configuration::updateValue(self::CONFIG_SANDBOX_BASE_URL, '')
-            && Configuration::updateValue(self::CONFIG_SANDBOX_CLIENT_ID, '');
+            && $this->registerHook('paymentOptions')
+            && $this->registerHook('paymentReturn')
+            && $this->installTransactionTable()
+            && Configuration::updateValue(self::CONFIG_ENABLED, false)
+            && Configuration::updateValue(self::CONFIG_ENVIRONMENT, 'sandbox')
+            && Configuration::updateValue(self::CONFIG_QR_VALIDITY, 300);
     }
 
-    /**
-     * Back Office configuration for the sandbox OAuth connection.
-     *
-     * No checkout hook is registered during this phase.
-     *
-     * @return string
-     */
+    public function hookPaymentOptions($params)
+    {
+        if (!$this->isPaymentAvailable()) {
+            return array();
+        }
+        $option = new PrestaShop\PrestaShop\Core\Payment\PaymentOption();
+        $option->setCallToActionText($this->l('Pagar mediante código QR'));
+        $option->setAction($this->context->link->getModuleLink($this->name, 'payment', array(), true));
+        return array($option);
+    }
+
+    public function hookPaymentReturn($params)
+    {
+        return $this->active ? $this->l('Tu pago QR está pendiente de confirmación.') : '';
+    }
+
     public function getContent()
     {
         if (!$this->canViewConfiguration()) {
-            return $this->displayError($this->l('You do not have permission to access this configuration.'));
+            return $this->displayError($this->l('No tienes permiso para acceder a esta configuración.'));
         }
-
         $output = '';
-
         if (Tools::isSubmit('submitRedenlaceConfiguration')) {
-            $output .= $this->processConfigurationSubmission();
-        } elseif (Tools::isSubmit('submitRedenlaceSandboxConnection')) {
-            $output .= $this->processSandboxConnectionTest();
-        } elseif (Tools::isSubmit('submitRedenlaceQrTest')) {
-            $output .= $this->processQrTestGeneration();
-        } elseif (Tools::getValue('redenlaceQrTestResult') === '1') {
-            $output .= $this->consumeQrTestResult();
+            $output = $this->processConfigurationSubmission();
+        } elseif (Tools::isSubmit('submitRedenlaceOAuthTest')) {
+            $output = $this->processOAuthTest();
+        }
+        return $output . $this->renderConfigurationForm();
+    }
+
+    public function getBaseUrl()
+    {
+        return Configuration::get(self::CONFIG_ENVIRONMENT) === 'production'
+            ? self::PRODUCTION_BASE_URL : self::SANDBOX_BASE_URL;
+    }
+
+    public function createOAuthClient()
+    {
+        $storedSecret = Configuration::get(self::CONFIG_CLIENT_SECRET);
+        if (!is_string($storedSecret) || $storedSecret === '') {
+            throw new RuntimeException('RedEnlace Client Secret is not configured.');
+        }
+        $storage = new RedEnlaceSecretStorage();
+        return RedEnlaceOAuthClient::fromBaseUrl($this->getBaseUrl(), Configuration::get(self::CONFIG_CLIENT_ID), $storage->decrypt($storedSecret));
+    }
+
+    public function getWebhookConfiguration()
+    {
+        $url = getenv('REDENLACE_WEBHOOK_URL');
+        $key = getenv('REDENLACE_WEBHOOK_KEY');
+        $value = getenv('REDENLACE_WEBHOOK_VALUE');
+
+        if (!is_string($url) || trim($url) === '') {
+            $url = Configuration::get(self::CONFIG_WEBHOOK_URL);
+        }
+        if (!is_string($key) || trim($key) === '') {
+            $key = Configuration::get(self::CONFIG_WEBHOOK_KEY);
+        }
+        if (!is_string($value) || trim($value) === '') {
+            $storedValue = Configuration::get(self::CONFIG_WEBHOOK_VALUE);
+            if (!is_string($storedValue) || $storedValue === '') {
+                throw new RuntimeException('The RedEnlace webhook secret is not configured.');
+            }
+            $value = (new RedEnlaceSecretStorage())->decrypt($storedValue);
         }
 
-        return $output . $this->renderConfigurationForm() . $this->renderQrTestForm();
+        if (!$this->isValidHttpsUrl($url) || !$this->isValidHeaderName($key) || !is_string($value) || trim($value) === '') {
+            throw new RuntimeException('The RedEnlace webhook environment configuration is incomplete.');
+        }
+        return array('url' => trim($url), 'key' => trim($key), 'value' => $value);
+    }
+
+    public function isPaymentAvailable()
+    {
+        if (!$this->active || !Configuration::get(self::CONFIG_ENABLED) || !isset($this->context->currency)
+            || $this->context->currency->iso_code !== 'BOB') {
+            return false;
+        }
+        try {
+            $this->assertCheckoutConfiguration();
+        } catch (Exception $exception) {
+            return false;
+        }
+        return true;
+    }
+
+    public function assertCheckoutConfiguration()
+    {
+        if (!in_array(Configuration::get(self::CONFIG_ENVIRONMENT), array('sandbox', 'production'), true)
+            || trim((string) Configuration::get(self::CONFIG_CLIENT_ID)) === ''
+            || trim((string) Configuration::get(self::CONFIG_CLIENT_SECRET)) === ''
+            || !ctype_digit((string) Configuration::get(self::CONFIG_ESTABLISHMENT_ID))
+            || trim((string) Configuration::get(self::CONFIG_ESTABLISHMENT_NAME)) === ''
+            || (int) Configuration::get(self::CONFIG_QR_VALIDITY) < 1) {
+            throw new RuntimeException('RedEnlace checkout configuration is incomplete.');
+        }
+        $this->getWebhookConfiguration();
     }
 
     private function processConfigurationSubmission()
     {
         if (!$this->canModifyConfiguration() || !$this->isValidAdminToken()) {
-            return $this->displayError($this->l('Invalid or expired security token.'));
+            return $this->displayError($this->l('Token de seguridad inválido o vencido.'));
         }
-
-        $baseUrl = trim((string) Tools::getValue(self::CONFIG_SANDBOX_BASE_URL));
-        $clientId = trim((string) Tools::getValue(self::CONFIG_SANDBOX_CLIENT_ID));
-        $clientSecret = (string) Tools::getValue(self::CONFIG_SANDBOX_CLIENT_SECRET);
+        $enabled = (bool) Tools::getValue(self::CONFIG_ENABLED);
+        $environment = Tools::getValue(self::CONFIG_ENVIRONMENT);
+        $clientId = trim((string) Tools::getValue(self::CONFIG_CLIENT_ID));
+        $clientSecret = (string) Tools::getValue(self::CONFIG_CLIENT_SECRET);
         $establishmentId = trim((string) Tools::getValue(self::CONFIG_ESTABLISHMENT_ID));
         $establishmentName = trim((string) Tools::getValue(self::CONFIG_ESTABLISHMENT_NAME));
-        $webhookUrl = trim((string) Tools::getValue(self::CONFIG_WEBHOOK_URL));
-        $webhookKey = trim((string) Tools::getValue(self::CONFIG_WEBHOOK_KEY));
-        $webhookValue = (string) Tools::getValue(self::CONFIG_WEBHOOK_VALUE);
-
-        if (!$this->isValidHttpsUrl($baseUrl)) {
-            return $this->displayError($this->l('The Sandbox URL must be a valid HTTPS URL.'));
+        $validity = trim((string) Tools::getValue(self::CONFIG_QR_VALIDITY));
+        if (!in_array($environment, array('sandbox', 'production'), true) || $clientId === ''
+            || !ctype_digit($establishmentId) || (int) $establishmentId < 1 || $establishmentName === ''
+            || !ctype_digit($validity) || (int) $validity < 1) {
+            return $this->displayError($this->l('Revisa los campos obligatorios de la configuración.'));
         }
-
-        if ($clientId === '') {
-            return $this->displayError($this->l('The Client ID is required.'));
-        }
-
-        if ($establishmentId === '' || $establishmentName === '') {
-            return $this->displayError($this->l('The establishment ID and name are required.'));
-        }
-
-        if (!$this->isValidEstablishmentName($establishmentName)) {
-            return $this->displayError($this->l('The establishment name contains unsupported characters.'));
-        }
-
-        if (!$this->isValidHttpsUrl($webhookUrl) || $webhookKey === '') {
-            return $this->displayError($this->l('The webhook URL must be HTTPS and the webhook key is required.'));
-        }
-
         try {
-            $secretStorage = new RedEnlaceSecretStorage();
-            $encryptedSecret = $clientSecret !== ''
-                ? $secretStorage->encrypt($clientSecret)
-                : Configuration::get(self::CONFIG_SANDBOX_CLIENT_SECRET);
-            $encryptedWebhookValue = $webhookValue !== ''
-                ? $secretStorage->encrypt($webhookValue)
-                : Configuration::get(self::CONFIG_WEBHOOK_VALUE);
+            $storedSecret = $clientSecret !== '' ? (new RedEnlaceSecretStorage())->encrypt($clientSecret) : Configuration::get(self::CONFIG_CLIENT_SECRET);
         } catch (Exception $exception) {
-            return $this->displayError($this->l('A secret could not be stored securely.'));
+            return $this->displayError($this->l('No se pudo almacenar el Client Secret de forma segura.'));
         }
-
-        if (!is_string($encryptedSecret) || $encryptedSecret === ''
-            || !is_string($encryptedWebhookValue) || $encryptedWebhookValue === '') {
-            return $this->displayError($this->l('The Client Secret and webhook secret value are required.'));
+        if (!is_string($storedSecret) || $storedSecret === '') {
+            return $this->displayError($this->l('El Client Secret es obligatorio.'));
         }
-
-        if (!Configuration::updateValue(self::CONFIG_SANDBOX_BASE_URL, $baseUrl)
-            || !Configuration::updateValue(self::CONFIG_SANDBOX_CLIENT_ID, $clientId)
-            || !Configuration::updateValue(self::CONFIG_SANDBOX_CLIENT_SECRET, $encryptedSecret)
+        if (!Configuration::updateValue(self::CONFIG_ENABLED, $enabled)
+            || !Configuration::updateValue(self::CONFIG_ENVIRONMENT, $environment)
+            || !Configuration::updateValue(self::CONFIG_CLIENT_ID, $clientId)
+            || !Configuration::updateValue(self::CONFIG_CLIENT_SECRET, $storedSecret)
             || !Configuration::updateValue(self::CONFIG_ESTABLISHMENT_ID, $establishmentId)
             || !Configuration::updateValue(self::CONFIG_ESTABLISHMENT_NAME, $establishmentName)
-            || !Configuration::updateValue(self::CONFIG_WEBHOOK_URL, $webhookUrl)
-            || !Configuration::updateValue(self::CONFIG_WEBHOOK_KEY, $webhookKey)
-            || !Configuration::updateValue(self::CONFIG_WEBHOOK_VALUE, $encryptedWebhookValue)) {
-            return $this->displayError($this->l('The Sandbox configuration could not be saved.'));
+            || !Configuration::updateValue(self::CONFIG_QR_VALIDITY, (int) $validity)) {
+            return $this->displayError($this->l('No se pudo guardar la configuración.'));
         }
-
-        return $this->displayConfirmation($this->l('Sandbox configuration saved.'));
+        return $this->displayConfirmation($this->l('Configuración guardada.'));
     }
 
-    private function processSandboxConnectionTest()
+    private function processOAuthTest()
     {
         if (!$this->canModifyConfiguration() || !$this->isValidAdminToken()) {
-            return $this->displayError($this->l('Invalid or expired security token.'));
+            return $this->displayError($this->l('Token de seguridad inválido o vencido.'));
         }
-
         try {
-            $client = $this->createSandboxOAuthClient();
-            $token = $client->getAccessToken();
+            $token = $this->createOAuthClient()->getAccessToken();
         } catch (Exception $exception) {
-            return $this->displayError(
-                $this->l('Sandbox authentication could not be completed. Verify the saved URL and credentials.')
-            );
+            return $this->displayError($this->l('No se pudo autenticar con RedEnlace. Revisa el ambiente y las credenciales guardadas.'));
         }
-
-        $tokenType = isset($token['token_type']) && is_string($token['token_type'])
-            ? $token['token_type']
-            : $this->l('Not provided');
-        $expiresIn = isset($token['expires_in']) && is_numeric($token['expires_in'])
-            ? (int) $token['expires_in']
-            : null;
-
-        $message = $this->l('Sandbox authentication successful.')
-            . ' ' . $this->l('Token type:') . ' ' . Tools::safeOutput($tokenType) . '.';
-
-        if ($expiresIn !== null) {
-            $message .= ' ' . $this->l('Validity:') . ' ' . $expiresIn . ' ' . $this->l('seconds') . '.';
-        }
-
-        return $this->displayConfirmation($message);
-    }
-
-    private function createSandboxOAuthClient()
-    {
-        $baseUrl = Configuration::get(self::CONFIG_SANDBOX_BASE_URL);
-        $clientId = Configuration::get(self::CONFIG_SANDBOX_CLIENT_ID);
-        $establishmentId = Configuration::get(self::CONFIG_ESTABLISHMENT_ID);
-        $establishmentName = Configuration::get(self::CONFIG_ESTABLISHMENT_NAME);
-        $webhookUrl = Configuration::get(self::CONFIG_WEBHOOK_URL);
-        $webhookKey = Configuration::get(self::CONFIG_WEBHOOK_KEY);
-        $encryptedSecret = Configuration::get(self::CONFIG_SANDBOX_CLIENT_SECRET);
-
-        if (!is_string($encryptedSecret) || $encryptedSecret === '') {
-            throw new RuntimeException('Sandbox credentials are not configured.');
-        }
-
-        $secretStorage = new RedEnlaceSecretStorage();
-        $clientSecret = $secretStorage->decrypt($encryptedSecret);
-
-        return RedEnlaceOAuthClient::fromBaseUrl($baseUrl, $clientId, $clientSecret);
-    }
-
-    private function processQrTestGeneration()
-    {
-        if (!$this->canModifyConfiguration() || !$this->isValidAdminToken()) {
-            return $this->displayError($this->l('Invalid or expired security token.'));
-        }
-
-        $amount = trim((string) Tools::getValue('redenlace_qr_test_amount', '1.00'));
-        $validity = trim((string) Tools::getValue('redenlace_qr_test_validity', '300'));
-        if (!is_numeric($amount) || (float) $amount <= 0 || !ctype_digit($validity) || (int) $validity <= 0) {
-            return $this->displayError($this->l('Enter a positive amount and validity in seconds.'));
-        }
-
-        if ((int) Configuration::get(self::CONFIG_QR_TEST_LOCK) > time() - 90) {
-            return $this->displayError($this->l('A QR test generation is already in progress.'));
-        }
-        Configuration::updateValue(self::CONFIG_QR_TEST_LOCK, (string) time());
-
-        try {
-            $secretStorage = new RedEnlaceSecretStorage();
-            $webhookSecret = $secretStorage->decrypt(Configuration::get(self::CONFIG_WEBHOOK_VALUE));
-            $oauthClient = $this->createSandboxOAuthClient();
-            $qrClient = RedEnlaceQRClient::fromBaseUrl(
-                $oauthClient,
-                Configuration::get(self::CONFIG_SANDBOX_BASE_URL),
-                Configuration::get(self::CONFIG_SANDBOX_CLIENT_ID)
-            );
-            $result = $qrClient->generate(array(
-                'glosa' => 'Pago de prueba Petsofia',
-                'moneda' => 'BOB',
-                'monto' => $amount,
-                'numeroReferencia' => 'PETSOFIA-TEST-' . time() . '-' . strtoupper(bin2hex(random_bytes(8))),
-                'vigencia' => $validity,
-                'idEstablecimiento' => Configuration::get(self::CONFIG_ESTABLISHMENT_ID),
-                'nombreEstablecimiento' => Configuration::get(self::CONFIG_ESTABLISHMENT_NAME),
-                'webhook' => array(
-                    'url' => Configuration::get(self::CONFIG_WEBHOOK_URL),
-                    'key' => Configuration::get(self::CONFIG_WEBHOOK_KEY),
-                    'value' => $webhookSecret
-                )
-            ));
-            $result['monto'] = $amount;
-            $result['moneda'] = 'BOB';
-            $feedback = array('success' => true, 'result' => $result);
-        } catch (Exception $exception) {
-            $feedback = array('success' => false);
-        }
-
-        Configuration::deleteByName(self::CONFIG_QR_TEST_LOCK);
-        if (!Configuration::updateValue($this->getQrTestResultKey(), base64_encode(json_encode($feedback)))) {
-            return $this->displayError($this->l('The QR test result could not be stored.'));
-        }
-
-        Tools::redirectAdmin($this->context->link->getAdminLink(
-            'AdminModules', true, array(), array('configure' => $this->name, 'redenlaceQrTestResult' => 1)
-        ));
-
-        return '';
-    }
-
-    private function consumeQrTestResult()
-    {
-        $key = $this->getQrTestResultKey();
-        $stored = Configuration::get($key);
-        Configuration::deleteByName($key);
-        $json = is_string($stored) ? base64_decode($stored, true) : false;
-        $feedback = $json === false ? null : json_decode($json, true);
-
-        if (!is_array($feedback) || empty($feedback['success'])) {
-            return $this->displayError($this->l('The QR test could not be generated. Verify the saved configuration and try again.'));
-        }
-
-        return $this->renderQrTestResult($feedback['result']);
-    }
-
-    private function getQrTestResultKey()
-    {
-        return self::CONFIG_QR_TEST_RESULT_PREFIX . (int) $this->context->employee->id;
+        $expiresIn = isset($token['expires_in']) && is_numeric($token['expires_in']) ? (int) $token['expires_in'] : null;
+        return $this->displayConfirmation($expiresIn === null ? $this->l('Conexión con RedEnlace completada.') : sprintf($this->l('Conexión con RedEnlace completada. Vigencia del token: %d segundos.'), $expiresIn));
     }
 
     private function renderConfigurationForm()
     {
-        $actionUrl = $this->context->link->getAdminLink(
-            'AdminModules',
-            true,
-            array(),
-            array('configure' => $this->name)
-        );
-        $baseUrl = Configuration::get(self::CONFIG_SANDBOX_BASE_URL);
-        $clientId = Configuration::get(self::CONFIG_SANDBOX_CLIENT_ID);
-        $establishmentId = Configuration::get(self::CONFIG_ESTABLISHMENT_ID);
-        $establishmentName = Configuration::get(self::CONFIG_ESTABLISHMENT_NAME);
-        $webhookUrl = Configuration::get(self::CONFIG_WEBHOOK_URL);
-        $webhookKey = Configuration::get(self::CONFIG_WEBHOOK_KEY);
+        $actionUrl = $this->context->link->getAdminLink('AdminModules', true, array(), array('configure' => $this->name));
         $token = Tools::getAdminTokenLite('AdminModules');
-
-        $html = '<form action="' . Tools::safeOutput($actionUrl) . '" method="post">';
-        $html .= '<div class="panel">';
-        $html .= '<h3><i class="icon-cog"></i> ' . $this->l('RedEnlace Sandbox') . '</h3>';
-        $html .= '<p>' . $this->l('Configure the Sandbox credentials used only to test OAuth connectivity.') . '</p>';
-        $html .= '<div class="form-group">';
-        $html .= '<label class="control-label required" for="redenlace_sandbox_base_url">'
-            . $this->l('TEST URL (Sandbox)') . '</label>';
-        $html .= '<input type="url" class="form-control" id="redenlace_sandbox_base_url" name="'
-            . self::CONFIG_SANDBOX_BASE_URL . '" required value="' . Tools::safeOutput($baseUrl) . '">';
-        $html .= '</div>';
-        $html .= '<div class="form-group">';
-        $html .= '<label class="control-label required" for="redenlace_sandbox_client_id">'
-            . $this->l('Client ID') . '</label>';
-        $html .= '<input type="text" class="form-control" id="redenlace_sandbox_client_id" name="'
-            . self::CONFIG_SANDBOX_CLIENT_ID . '" required value="' . Tools::safeOutput($clientId) . '">';
-        $html .= '</div>';
-        $html .= '<div class="form-group">';
-        $html .= '<label class="control-label required" for="redenlace_sandbox_client_secret">'
-            . $this->l('Client Secret') . '</label>';
-        $html .= '<input type="password" class="form-control" id="redenlace_sandbox_client_secret" name="'
-            . self::CONFIG_SANDBOX_CLIENT_SECRET . '" required autocomplete="new-password" value="">';
-        $html .= '<p class="help-block">' . $this->l('The secret is never displayed. Leave blank to retain its saved value.') . '</p>';
-        $html .= '</div>';
-        $html .= '<div class="form-group"><label class="control-label required" for="redenlace_establishment_id">'
-            . $this->l('Establishment ID') . '</label>';
-        $html .= '<input type="text" class="form-control" id="redenlace_establishment_id" name="'
-            . self::CONFIG_ESTABLISHMENT_ID . '" required value="' . Tools::safeOutput($establishmentId) . '"></div>';
-        $html .= '<div class="form-group"><label class="control-label required" for="redenlace_establishment_name">'
-            . $this->l('Establishment name') . '</label>';
-        $html .= '<input type="text" class="form-control" id="redenlace_establishment_name" name="'
-            . self::CONFIG_ESTABLISHMENT_NAME . '" required value="' . Tools::safeOutput($establishmentName) . '"></div>';
-        $html .= '<div class="form-group"><label class="control-label required" for="redenlace_webhook_url">'
-            . $this->l('Webhook URL') . '</label>';
-        $html .= '<input type="url" class="form-control" id="redenlace_webhook_url" name="'
-            . self::CONFIG_WEBHOOK_URL . '" required value="' . Tools::safeOutput($webhookUrl) . '"></div>';
-        $html .= '<div class="form-group"><label class="control-label required" for="redenlace_webhook_key">'
-            . $this->l('Webhook key') . '</label>';
-        $html .= '<input type="text" class="form-control" id="redenlace_webhook_key" name="'
-            . self::CONFIG_WEBHOOK_KEY . '" required value="' . Tools::safeOutput($webhookKey) . '"></div>';
-        $html .= '<div class="form-group"><label class="control-label required" for="redenlace_webhook_value">'
-            . $this->l('Webhook secret value') . '</label>';
-        $html .= '<input type="password" class="form-control" id="redenlace_webhook_value" name="'
-            . self::CONFIG_WEBHOOK_VALUE . '" autocomplete="new-password" value="">';
-        $html .= '<p class="help-block">' . $this->l('Encrypted and never displayed. Leave blank to retain its saved value.') . '</p>';
-        $html .= '</div>';
-        $html .= '<input type="hidden" name="token" value="' . Tools::safeOutput($token) . '">';
-        $html .= '<div class="panel-footer">';
-        $html .= '<button type="submit" name="submitRedenlaceConfiguration" class="btn btn-default pull-right">';
-        $html .= '<i class="process-icon-save"></i> ' . $this->l('Save') . '</button>';
-        $html .= '<button type="submit" name="submitRedenlaceSandboxConnection" class="btn btn-default">';
-        $html .= '<i class="icon-plug"></i> ' . $this->l('Test Sandbox connection') . '</button>';
-        $html .= '</div></div></form>';
-
+        $enabled = (bool) Configuration::get(self::CONFIG_ENABLED);
+        $environment = Configuration::get(self::CONFIG_ENVIRONMENT) ?: 'sandbox';
+        $html = '<form action="' . Tools::safeOutput($actionUrl) . '" method="post"><div class="panel"><h3><i class="icon-qrcode"></i> ' . $this->l('RedEnlace QR Simple') . '</h3>';
+        $html .= '<fieldset><legend>' . $this->l('Configuración general') . '</legend><div class="form-group"><label class="control-label">' . $this->l('Habilitar pagos QR') . '</label><div class="radio"><label><input type="radio" name="' . self::CONFIG_ENABLED . '" value="1"' . ($enabled ? ' checked' : '') . '> ' . $this->l('Sí') . '</label></div><div class="radio"><label><input type="radio" name="' . self::CONFIG_ENABLED . '" value="0"' . (!$enabled ? ' checked' : '') . '> ' . $this->l('No') . '</label></div></div><div class="form-group"><label class="control-label required" for="redenlace_environment">' . $this->l('Ambiente') . '</label><select class="form-control" id="redenlace_environment" name="' . self::CONFIG_ENVIRONMENT . '"><option value="sandbox"' . ($environment === 'sandbox' ? ' selected' : '') . '>' . $this->l('Sandbox') . '</option><option value="production"' . ($environment === 'production' ? ' selected' : '') . '>' . $this->l('Producción') . '</option></select></div></fieldset>';
+        $html .= '<fieldset><legend>' . $this->l('Credenciales de RedEnlace') . '</legend>' . $this->textInput(self::CONFIG_CLIENT_ID, 'redenlace_client_id', $this->l('Client ID'), Configuration::get(self::CONFIG_CLIENT_ID), 'text') . $this->textInput(self::CONFIG_CLIENT_SECRET, 'redenlace_client_secret', $this->l('Client Secret'), '', 'password') . '<p class="help-block">' . $this->l('El secreto está cifrado y nunca se muestra. Déjalo vacío para conservar el valor guardado.') . '</p></fieldset>';
+        $html .= '<fieldset><legend>' . $this->l('Datos del establecimiento') . '</legend>' . $this->textInput(self::CONFIG_ESTABLISHMENT_ID, 'redenlace_establishment_id', $this->l('ID del establecimiento'), Configuration::get(self::CONFIG_ESTABLISHMENT_ID), 'number') . $this->textInput(self::CONFIG_ESTABLISHMENT_NAME, 'redenlace_establishment_name', $this->l('Nombre del establecimiento'), Configuration::get(self::CONFIG_ESTABLISHMENT_NAME), 'text') . '</fieldset>';
+        $html .= '<fieldset><legend>' . $this->l('Configuración del pago') . '</legend>' . $this->textInput(self::CONFIG_QR_VALIDITY, 'redenlace_qr_validity', $this->l('Vigencia del QR (segundos)'), Configuration::get(self::CONFIG_QR_VALIDITY) ?: 300, 'number') . '<p class="help-block">' . $this->l('Validar los límites permitidos con ATC.') . '</p></fieldset>';
+        $html .= '<input type="hidden" name="token" value="' . Tools::safeOutput($token) . '"><div class="panel-footer"><button type="submit" name="submitRedenlaceConfiguration" class="btn btn-default pull-right"><i class="process-icon-save"></i> ' . $this->l('Guardar configuración') . '</button><button type="submit" name="submitRedenlaceOAuthTest" class="btn btn-default"><i class="icon-plug"></i> ' . $this->l('Probar conexión con RedEnlace') . '</button></div></div></form>';
         return $html;
     }
 
-    private function renderQrTestForm()
+    private function textInput($name, $id, $label, $value, $type)
     {
-        $actionUrl = $this->context->link->getAdminLink(
-            'AdminModules', true, array(), array('configure' => $this->name)
-        );
-        $token = Tools::getAdminTokenLite('AdminModules');
-        $html = '<form action="' . Tools::safeOutput($actionUrl) . '" method="post" id="redenlace-qr-test-form"><div class="panel">';
-        $html .= '<h3><i class="icon-qrcode"></i> ' . $this->l('Generate Sandbox test QR') . '</h3>';
-        $html .= '<p>' . $this->l('This explicit action creates no PrestaShop order and does not confirm any payment.') . '</p>';
-        $html .= '<div class="form-group"><label class="control-label">' . $this->l('Description') . '</label>';
-        $html .= '<input type="text" class="form-control" value="Pago de prueba Petsofia" readonly></div>';
-        $html .= '<div class="form-group"><label class="control-label">' . $this->l('Currency') . '</label>';
-        $html .= '<input type="text" class="form-control" value="BOB" readonly></div>';
-        $html .= '<div class="form-group"><label class="control-label required" for="redenlace_qr_test_amount">' . $this->l('Amount') . '</label>';
-        $html .= '<input type="text" class="form-control" id="redenlace_qr_test_amount" name="redenlace_qr_test_amount" required value="1.00"></div>';
-        $html .= '<div class="form-group"><label class="control-label required" for="redenlace_qr_test_validity">' . $this->l('Validity (seconds)') . '</label>';
-        $html .= '<input type="number" min="1" step="1" class="form-control" id="redenlace_qr_test_validity" name="redenlace_qr_test_validity" required value="300"></div>';
-        $html .= '<input type="hidden" name="token" value="' . Tools::safeOutput($token) . '">';
-        $html .= '<div class="panel-footer"><button type="submit" name="submitRedenlaceQrTest" class="btn btn-primary" id="redenlace-qr-test-submit">';
-        $html .= '<i class="icon-qrcode"></i> ' . $this->l('Generate test QR') . '</button></div></div></form>';
-        $html .= '<script>document.getElementById("redenlace-qr-test-form").addEventListener("submit",function(){document.getElementById("redenlace-qr-test-submit").disabled=true;});</script>';
-
-        return $html;
+        return '<div class="form-group"><label class="control-label required" for="' . $id . '">' . $label . '</label><input class="form-control" id="' . $id . '" name="' . $name . '" type="' . $type . '" required' . ($type === 'number' ? ' min="1" step="1"' : '') . ' value="' . Tools::safeOutput($value) . '"></div>';
     }
 
-    private function renderQrTestResult(array $result)
+    private function installTransactionTable()
     {
-        foreach (array('numeroReferenciaOriginante', 'numeroReferencia', 'estado', 'monto', 'moneda', 'fechaExpiracion', 'qr') as $field) {
-            if (!isset($result[$field]) || !is_scalar($result[$field])) {
-                return $this->displayError($this->l('The QR test result is incomplete.'));
-            }
-        }
-
-        $html = '<div class="panel"><h3><i class="icon-check"></i> ' . $this->l('Sandbox test QR generated') . '</h3><dl class="dl-horizontal">';
-        $html .= '<dt>' . $this->l('Originating reference') . '</dt><dd>' . Tools::safeOutput($result['numeroReferenciaOriginante']) . '</dd>';
-        $html .= '<dt>' . $this->l('ATC reference') . '</dt><dd>' . Tools::safeOutput($result['numeroReferencia']) . '</dd>';
-        $html .= '<dt>' . $this->l('Status') . '</dt><dd>' . Tools::safeOutput($result['estado']) . '</dd>';
-        $html .= '<dt>' . $this->l('Amount') . '</dt><dd>' . Tools::safeOutput($result['monto']) . ' ' . Tools::safeOutput($result['moneda']) . '</dd>';
-        $html .= '<dt>' . $this->l('Expiration') . '</dt><dd>' . Tools::safeOutput($result['fechaExpiracion']) . '</dd></dl>';
-        $html .= '<p><img alt="' . $this->l('RedEnlace payment QR') . '" src="data:image/png;base64,' . htmlspecialchars($result['qr'], ENT_QUOTES, 'UTF-8') . '"></p></div>';
-
-        return $html;
+        return Db::getInstance()->execute('CREATE TABLE IF NOT EXISTS `' . _DB_PREFIX_ . 'redenlace_transaction` (`id_redenlace_transaction` INT UNSIGNED NOT NULL AUTO_INCREMENT, `id_cart` INT UNSIGNED NOT NULL, `id_order` INT UNSIGNED NOT NULL, `originating_reference` VARCHAR(100) NOT NULL, `atc_reference` VARCHAR(100) DEFAULT NULL, `amount` DECIMAL(20,6) NOT NULL, `currency` CHAR(3) NOT NULL, `status` VARCHAR(32) NOT NULL, `expires_at` VARCHAR(64) DEFAULT NULL, `qr_base64` MEDIUMTEXT DEFAULT NULL, `date_add` DATETIME NOT NULL, `date_upd` DATETIME NOT NULL, PRIMARY KEY (`id_redenlace_transaction`), UNIQUE KEY `redenlace_cart` (`id_cart`), UNIQUE KEY `redenlace_originating_reference` (`originating_reference`), UNIQUE KEY `redenlace_atc_reference` (`atc_reference`)) ENGINE=' . _MYSQL_ENGINE_ . ' DEFAULT CHARSET=utf8;');
     }
 
     private function canViewConfiguration()
     {
-        return isset($this->context->employee)
-            && Validate::isLoadedObject($this->context->employee)
-            && $this->context->employee->can('view', 'AdminModules');
+        return isset($this->context->employee) && Validate::isLoadedObject($this->context->employee) && $this->context->employee->can('view', 'AdminModules');
     }
 
     private function canModifyConfiguration()
     {
-        return isset($this->context->employee)
-            && Validate::isLoadedObject($this->context->employee)
-            && $this->context->employee->can('edit', 'AdminModules');
+        return isset($this->context->employee) && Validate::isLoadedObject($this->context->employee) && $this->context->employee->can('edit', 'AdminModules');
     }
 
     private function isValidAdminToken()
     {
         $token = Tools::getValue('token');
-        $expectedToken = Tools::getAdminTokenLite('AdminModules');
-
-        return is_string($token) && hash_equals($expectedToken, $token);
+        return is_string($token) && hash_equals(Tools::getAdminTokenLite('AdminModules'), $token);
     }
 
-    /**
-     * @param string $url
-     * @return bool
-     */
     private function isValidHttpsUrl($url)
     {
-        $parts = filter_var($url, FILTER_VALIDATE_URL) ? parse_url($url) : false;
-
-        return is_array($parts)
-            && isset($parts['scheme'], $parts['host'])
-            && $parts['scheme'] === 'https';
+        $parts = is_string($url) && filter_var($url, FILTER_VALIDATE_URL) ? parse_url($url) : false;
+        return is_array($parts) && isset($parts['scheme'], $parts['host']) && $parts['scheme'] === 'https';
     }
 
-    /**
-     * @param string $name
-     * @return bool
-     */
-    private function isValidEstablishmentName($name)
+    private function isValidHeaderName($name)
     {
-        return is_string($name)
-            && preg_match('/^[A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ ]+$/u', $name) === 1;
+        return is_string($name) && preg_match('/^[A-Za-z0-9-]+$/', $name) === 1;
     }
 }

@@ -24,3 +24,27 @@ class Tools extends ToolsCore
 class Validate extends ValidateCore
 {
 }
+
+class ModuleFrontController extends ModuleFrontControllerCore
+{
+    /** @var Redenlace */
+    public $module;
+
+    /** @var ContextCore */
+    public $context;
+
+    /** @var array */
+    public $errors = array();
+}
+
+class Cart extends CartCore
+{
+}
+
+class Order extends OrderCore
+{
+}
+
+class PrestaShopLogger extends PrestaShopLoggerCore
+{
+}

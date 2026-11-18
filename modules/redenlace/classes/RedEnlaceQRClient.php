@@ -13,6 +13,7 @@ class RedEnlaceQRClient
     const DEFAULT_CONNECT_TIMEOUT = 10;
     const DEFAULT_TIMEOUT = 30;
     const MAX_QR_PNG_BYTES = 1048576;
+    const AMOUNT_PLACEHOLDER = '__REDENLACE_JSON_AMOUNT__';
 
     /** @var RedEnlaceOAuthClient */
     private $oauthClient;
@@ -99,11 +100,7 @@ class RedEnlaceQRClient
             throw new RuntimeException('RedEnlace OAuth did not provide an access token.');
         }
 
-        $json = json_encode($payload);
-
-        if ($json === false) {
-            throw new RuntimeException('The RedEnlace QR request could not be encoded as JSON.');
-        }
+        $json = $this->encodePayload($payload, $request['monto']);
 
         $response = $this->sendRequest(array(
             'access_token: ' . $token['access_token'],
@@ -113,7 +110,7 @@ class RedEnlaceQRClient
         ), $json);
 
         if ($response['status'] < 200 || $response['status'] >= 300) {
-            throw new RuntimeException('RedEnlace QR generation failed with HTTP status ' . $response['status'] . '.');
+            throw new RuntimeException($this->buildHttpErrorMessage($response));
         }
 
         $body = json_decode($response['body'], true);
@@ -149,6 +146,22 @@ class RedEnlaceQRClient
             throw new InvalidArgumentException('RedEnlace QR currency must be BOB.');
         }
 
+        if (!is_numeric($request['monto']) || (float) $request['monto'] <= 0) {
+            throw new InvalidArgumentException('RedEnlace QR amount must be a positive decimal.');
+        }
+
+        if (!preg_match('/^\d+(?:\.\d{1,2})?$/', (string) $request['monto'])) {
+            throw new InvalidArgumentException('RedEnlace QR amount can contain no more than two decimal places.');
+        }
+
+        if (!ctype_digit((string) $request['vigencia']) || (int) $request['vigencia'] < 1) {
+            throw new InvalidArgumentException('RedEnlace QR validity must be a positive integer.');
+        }
+
+        if (!ctype_digit((string) $request['idEstablecimiento']) || (int) $request['idEstablecimiento'] < 1) {
+            throw new InvalidArgumentException('RedEnlace establishment ID must be a positive integer.');
+        }
+
         if (!isset($request['webhook']) || !is_array($request['webhook'])) {
             throw new InvalidArgumentException('RedEnlace QR webhook data is required.');
         }
@@ -160,10 +173,12 @@ class RedEnlaceQRClient
         return array(
             'glosa' => $request['glosa'],
             'moneda' => $request['moneda'],
-            'monto' => $request['monto'],
+            // Encode this placeholder as a JSON numeric literal with its two
+            // decimal places preserved; do not send a JSON string.
+            'monto' => self::AMOUNT_PLACEHOLDER,
             'numeroReferencia' => $request['numeroReferencia'],
-            'vigencia' => $request['vigencia'],
-            'idEstablecimiento' => $request['idEstablecimiento'],
+            'vigencia' => (int) $request['vigencia'],
+            'idEstablecimiento' => (int) $request['idEstablecimiento'],
             'nombreEstablecimiento' => $request['nombreEstablecimiento'],
             'webhook' => array(
                 'url' => $request['webhook']['url'],
@@ -171,6 +186,37 @@ class RedEnlaceQRClient
                 'value' => $request['webhook']['value']
             )
         );
+    }
+
+    /**
+     * Encodes the documented decimal amount with exactly two decimal places.
+     * PHP floats discard trailing zeroes (for example 11.30 becomes 11.3),
+     * which some gateway validators treat as a different decimal scale.
+     *
+     * @param array $payload
+     * @param string|int|float $amount
+     * @return string
+     */
+    private function encodePayload(array $payload, $amount)
+    {
+        $json = json_encode($payload);
+        if ($json === false) {
+            throw new RuntimeException('The RedEnlace QR request could not be encoded as JSON.');
+        }
+
+        $amount = (string) $amount;
+        $parts = explode('.', $amount, 2);
+        $integer = ltrim($parts[0], '0');
+        $integer = $integer === '' ? '0' : $integer;
+        $fraction = isset($parts[1]) ? str_pad($parts[1], 2, '0') : '00';
+        $decimal = $integer . '.' . $fraction;
+
+        $json = str_replace('"' . self::AMOUNT_PLACEHOLDER . '"', $decimal, $json);
+        if (strpos($json, self::AMOUNT_PLACEHOLDER) !== false) {
+            throw new RuntimeException('The RedEnlace QR amount could not be encoded.');
+        }
+
+        return $json;
     }
 
     /**
@@ -266,6 +312,78 @@ class RedEnlaceQRClient
         }
 
         return $response;
+    }
+
+    /**
+     * Extracts only documented, non-sensitive validation identifiers from an
+     * error response. It never logs or exposes the complete provider body.
+     *
+     * @param array $response
+     * @return string
+     */
+    private function buildHttpErrorMessage(array $response)
+    {
+        $message = 'RedEnlace QR generation failed with HTTP status ' . $response['status'] . '.';
+        $body = json_decode($response['body'], true);
+
+        if (!is_array($body) || !isset($body['errors']) || !is_array($body['errors'])) {
+            return $message;
+        }
+
+        $identifiers = array();
+        foreach ($body['errors'] as $error) {
+            if (!is_array($error)) {
+                continue;
+            }
+
+            $field = isset($error['field']) ? $this->sanitizeDiagnosticIdentifier($error['field']) : '';
+            $code = isset($error['code']) ? $this->sanitizeDiagnosticIdentifier($error['code']) : '';
+            if ($field !== '' || $code !== '') {
+                $identifier = trim($field . ($field !== '' && $code !== '' ? ':' : '') . $code);
+                if ($field === 'monto' && isset($error['message'])) {
+                    $detail = $this->sanitizeAmountDiagnostic($error['message']);
+                    if ($detail !== '') {
+                        $identifier .= ' (' . $detail . ')';
+                    }
+                }
+                $identifiers[] = $identifier;
+            }
+        }
+
+        return empty($identifiers)
+            ? $message
+            : $message . ' Validation: ' . implode(', ', array_slice($identifiers, 0, 5)) . '.';
+    }
+
+    /**
+     * @param mixed $value
+     * @return string
+     */
+    private function sanitizeDiagnosticIdentifier($value)
+    {
+        if (!is_scalar($value)) {
+            return '';
+        }
+
+        $value = preg_replace('/[^A-Za-z0-9_.-]/', '', (string) $value);
+        return substr($value, 0, 80);
+    }
+
+    /**
+     * Keeps the provider's amount-validation detail useful for administrators
+     * while excluding control characters and limiting its size.
+     *
+     * @param mixed $value
+     * @return string
+     */
+    private function sanitizeAmountDiagnostic($value)
+    {
+        if (!is_scalar($value)) {
+            return '';
+        }
+
+        $value = preg_replace('/[\r\n\x00-\x1F\x7F]+/', ' ', (string) $value);
+        return substr(trim($value), 0, 160);
     }
 
     /**
