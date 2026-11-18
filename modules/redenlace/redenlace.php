@@ -20,6 +20,7 @@ class Redenlace extends PaymentModule
     const CONFIG_WEBHOOK_URL = 'REDENLACE_WEBHOOK_URL';
     const CONFIG_WEBHOOK_KEY = 'REDENLACE_WEBHOOK_KEY';
     const CONFIG_WEBHOOK_VALUE = 'REDENLACE_WEBHOOK_VALUE';
+    const WEBHOOK_HEADER_NAME = 'X-RedEnlace-Webhook-Token';
     const SANDBOX_BASE_URL = 'https://atcgwapitest.redenlace.com.bo/sandbox/';
     const PRODUCTION_BASE_URL = 'https://api.redenlace.com.bo/';
 
@@ -27,7 +28,7 @@ class Redenlace extends PaymentModule
     {
         $this->name = 'redenlace';
         $this->tab = 'payments_gateways';
-        $this->version = '0.2.0';
+        $this->version = '0.3.0';
         $this->author = 'LogicaTI';
         $this->need_instance = 0;
         $this->bootstrap = true;
@@ -96,28 +97,29 @@ class Redenlace extends PaymentModule
 
     public function getWebhookConfiguration()
     {
-        $url = getenv('REDENLACE_WEBHOOK_URL');
-        $key = getenv('REDENLACE_WEBHOOK_KEY');
-        $value = getenv('REDENLACE_WEBHOOK_VALUE');
+        $url = trim((string) Configuration::get(self::CONFIG_WEBHOOK_URL));
+        if (!$this->isValidHttpsUrl($url)) {
+            throw new RuntimeException('The RedEnlace webhook URL must be a valid HTTPS URL.');
+        }
 
-        if (!is_string($url) || trim($url) === '') {
-            $url = Configuration::get(self::CONFIG_WEBHOOK_URL);
-        }
-        if (!is_string($key) || trim($key) === '') {
-            $key = Configuration::get(self::CONFIG_WEBHOOK_KEY);
-        }
-        if (!is_string($value) || trim($value) === '') {
-            $storedValue = Configuration::get(self::CONFIG_WEBHOOK_VALUE);
-            if (!is_string($storedValue) || $storedValue === '') {
-                throw new RuntimeException('The RedEnlace webhook secret is not configured.');
+        $storedValue = Configuration::get(self::CONFIG_WEBHOOK_VALUE);
+        $storage = new RedEnlaceSecretStorage();
+        if (!is_string($storedValue) || $storedValue === '') {
+            try {
+                $storedValue = $storage->encrypt(bin2hex(random_bytes(32)));
+            } catch (Exception $exception) {
+                throw new RuntimeException('Unable to generate the RedEnlace webhook secret.');
             }
-            $value = (new RedEnlaceSecretStorage())->decrypt($storedValue);
+            if (!Configuration::updateValue(self::CONFIG_WEBHOOK_VALUE, $storedValue)) {
+                throw new RuntimeException('Unable to store the RedEnlace webhook secret.');
+            }
         }
 
-        if (!$this->isValidHttpsUrl($url) || !$this->isValidHeaderName($key) || !is_string($value) || trim($value) === '') {
-            throw new RuntimeException('The RedEnlace webhook environment configuration is incomplete.');
-        }
-        return array('url' => trim($url), 'key' => trim($key), 'value' => $value);
+        return array(
+            'url' => $url,
+            'key' => self::WEBHOOK_HEADER_NAME,
+            'value' => $storage->decrypt($storedValue)
+        );
     }
 
     public function isPaymentAvailable()
@@ -159,9 +161,10 @@ class Redenlace extends PaymentModule
         $establishmentId = trim((string) Tools::getValue(self::CONFIG_ESTABLISHMENT_ID));
         $establishmentName = trim((string) Tools::getValue(self::CONFIG_ESTABLISHMENT_NAME));
         $validity = trim((string) Tools::getValue(self::CONFIG_QR_VALIDITY));
+        $webhookUrl = trim((string) Tools::getValue(self::CONFIG_WEBHOOK_URL));
         if (!in_array($environment, array('sandbox', 'production'), true) || $clientId === ''
             || !ctype_digit($establishmentId) || (int) $establishmentId < 1 || $establishmentName === ''
-            || !ctype_digit($validity) || (int) $validity < 1) {
+            || !ctype_digit($validity) || (int) $validity < 1 || !$this->isValidHttpsUrl($webhookUrl)) {
             return $this->displayError($this->l('Revisa los campos obligatorios de la configuración.'));
         }
         try {
@@ -178,7 +181,8 @@ class Redenlace extends PaymentModule
             || !Configuration::updateValue(self::CONFIG_CLIENT_SECRET, $storedSecret)
             || !Configuration::updateValue(self::CONFIG_ESTABLISHMENT_ID, $establishmentId)
             || !Configuration::updateValue(self::CONFIG_ESTABLISHMENT_NAME, $establishmentName)
-            || !Configuration::updateValue(self::CONFIG_QR_VALIDITY, (int) $validity)) {
+            || !Configuration::updateValue(self::CONFIG_QR_VALIDITY, (int) $validity)
+            || !Configuration::updateValue(self::CONFIG_WEBHOOK_URL, $webhookUrl)) {
             return $this->displayError($this->l('No se pudo guardar la configuración.'));
         }
         return $this->displayConfirmation($this->l('Configuración guardada.'));
@@ -208,7 +212,7 @@ class Redenlace extends PaymentModule
         $html .= '<fieldset><legend>' . $this->l('Configuración general') . '</legend><div class="form-group"><label class="control-label">' . $this->l('Habilitar pagos QR') . '</label><div class="radio"><label><input type="radio" name="' . self::CONFIG_ENABLED . '" value="1"' . ($enabled ? ' checked' : '') . '> ' . $this->l('Sí') . '</label></div><div class="radio"><label><input type="radio" name="' . self::CONFIG_ENABLED . '" value="0"' . (!$enabled ? ' checked' : '') . '> ' . $this->l('No') . '</label></div></div><div class="form-group"><label class="control-label required" for="redenlace_environment">' . $this->l('Ambiente') . '</label><select class="form-control" id="redenlace_environment" name="' . self::CONFIG_ENVIRONMENT . '"><option value="sandbox"' . ($environment === 'sandbox' ? ' selected' : '') . '>' . $this->l('Sandbox') . '</option><option value="production"' . ($environment === 'production' ? ' selected' : '') . '>' . $this->l('Producción') . '</option></select></div></fieldset>';
         $html .= '<fieldset><legend>' . $this->l('Credenciales de RedEnlace') . '</legend>' . $this->textInput(self::CONFIG_CLIENT_ID, 'redenlace_client_id', $this->l('Client ID'), Configuration::get(self::CONFIG_CLIENT_ID), 'text') . $this->textInput(self::CONFIG_CLIENT_SECRET, 'redenlace_client_secret', $this->l('Client Secret'), '', 'password') . '<p class="help-block">' . $this->l('El secreto está cifrado y nunca se muestra. Déjalo vacío para conservar el valor guardado.') . '</p></fieldset>';
         $html .= '<fieldset><legend>' . $this->l('Datos del establecimiento') . '</legend>' . $this->textInput(self::CONFIG_ESTABLISHMENT_ID, 'redenlace_establishment_id', $this->l('ID del establecimiento'), Configuration::get(self::CONFIG_ESTABLISHMENT_ID), 'number') . $this->textInput(self::CONFIG_ESTABLISHMENT_NAME, 'redenlace_establishment_name', $this->l('Nombre del establecimiento'), Configuration::get(self::CONFIG_ESTABLISHMENT_NAME), 'text') . '</fieldset>';
-        $html .= '<fieldset><legend>' . $this->l('Configuración del pago') . '</legend>' . $this->textInput(self::CONFIG_QR_VALIDITY, 'redenlace_qr_validity', $this->l('Vigencia del QR (segundos)'), Configuration::get(self::CONFIG_QR_VALIDITY) ?: 300, 'number') . '<p class="help-block">' . $this->l('Validar los límites permitidos con ATC.') . '</p></fieldset>';
+        $html .= '<fieldset><legend>' . $this->l('Configuración del pago') . '</legend>' . $this->textInput(self::CONFIG_QR_VALIDITY, 'redenlace_qr_validity', $this->l('Vigencia del QR (segundos)'), Configuration::get(self::CONFIG_QR_VALIDITY) ?: 300, 'number') . $this->textInput(self::CONFIG_WEBHOOK_URL, 'redenlace_webhook_url', $this->l('URL pública HTTPS del webhook'), Configuration::get(self::CONFIG_WEBHOOK_URL), 'url') . '<p class="help-block">' . $this->l('El secreto del webhook se genera automáticamente, se guarda cifrado y nunca se muestra.') . '</p><p class="help-block">' . $this->l('Validar los límites permitidos con ATC.') . '</p></fieldset>';
         $html .= '<input type="hidden" name="token" value="' . Tools::safeOutput($token) . '"><div class="panel-footer"><button type="submit" name="submitRedenlaceConfiguration" class="btn btn-default pull-right"><i class="process-icon-save"></i> ' . $this->l('Guardar configuración') . '</button><button type="submit" name="submitRedenlaceOAuthTest" class="btn btn-default"><i class="icon-plug"></i> ' . $this->l('Probar conexión con RedEnlace') . '</button></div></div></form>';
         return $html;
     }

@@ -16,6 +16,43 @@ class RedEnlaceTransactionRepository
     }
 
     /**
+     * @param string $atcReference
+     * @return array|false
+     */
+    public function findByAtcReference($atcReference)
+    {
+        return Db::getInstance()->getRow(
+            'SELECT * FROM `' . _DB_PREFIX_ . 'redenlace_transaction` WHERE atc_reference = \'' . pSQL($atcReference) . '\''
+        );
+    }
+
+    /**
+     * Persists a provider state without allowing a delayed notification to
+     * downgrade a payment already confirmed as paid.
+     *
+     * @param int $transactionId
+     * @param string $status
+     * @return bool
+     */
+    public function markVerifiedStatus($transactionId, $status)
+    {
+        $transaction = Db::getInstance()->getRow(
+            'SELECT status FROM `' . _DB_PREFIX_ . 'redenlace_transaction` WHERE id_redenlace_transaction = ' . (int) $transactionId
+        );
+        if (!is_array($transaction)) {
+            return false;
+        }
+        if ($transaction['status'] === 'PAGADO' && $status !== 'PAGADO') {
+            return true;
+        }
+
+        return Db::getInstance()->update('redenlace_transaction', array(
+            'status' => pSQL($status),
+            'date_upd' => date('Y-m-d H:i:s')
+        ), 'id_redenlace_transaction = ' . (int) $transactionId);
+    }
+
+    /**
      * @param int $cartId
      * @param int $orderId
      * @param string $reference

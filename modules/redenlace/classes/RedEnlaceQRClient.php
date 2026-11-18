@@ -10,6 +10,7 @@
 class RedEnlaceQRClient
 {
     const GENERATE_PATH = '/qr/simple/v2/generate';
+    const VERIFY_PATH = '/qr/simple/v2/verify/';
     const DEFAULT_CONNECT_TIMEOUT = 10;
     const DEFAULT_TIMEOUT = 30;
     const MAX_QR_PNG_BYTES = 1048576;
@@ -20,6 +21,9 @@ class RedEnlaceQRClient
 
     /** @var string */
     private $generateUrl;
+
+    /** @var string */
+    private $verifyUrl;
 
     /** @var string */
     private $clientId;
@@ -61,6 +65,10 @@ class RedEnlaceQRClient
 
         $this->oauthClient = $oauthClient;
         $this->generateUrl = trim($generateUrl);
+        $this->verifyUrl = preg_replace('#/generate$#', '/verify/', $this->generateUrl);
+        if (!is_string($this->verifyUrl) || $this->verifyUrl === $this->generateUrl) {
+            throw new InvalidArgumentException('RedEnlace QR verification URL could not be determined.');
+        }
         $this->clientId = trim($clientId);
         $this->httpTransport = $httpTransport;
         $this->maxQrPngBytes = $maxQrPngBytes;
@@ -120,6 +128,60 @@ class RedEnlaceQRClient
         }
 
         return $this->normalizeResponse($body);
+    }
+
+    /**
+     * Obtains the authoritative state of a QR using its ATC reference.
+     *
+     * @param string $atcReference Reference returned by QR generation.
+     * @return array Normalized verification data.
+     */
+    public function verify($atcReference)
+    {
+        if (!is_string($atcReference) || trim($atcReference) === '') {
+            throw new InvalidArgumentException('RedEnlace ATC reference is required for verification.');
+        }
+
+        $token = $this->oauthClient->getAccessToken();
+        if (!isset($token['access_token']) || !is_string($token['access_token']) || $token['access_token'] === '') {
+            throw new RuntimeException('RedEnlace OAuth did not provide an access token.');
+        }
+
+        $response = $this->sendGetRequest(
+            $this->verifyUrl . rawurlencode(trim($atcReference)),
+            array(
+                'access_token: ' . $token['access_token'],
+                'client_id: ' . $this->clientId,
+                'Content-Type: application/json',
+                'Accept: application/json'
+            )
+        );
+        if ($response['status'] < 200 || $response['status'] >= 300) {
+            throw new RuntimeException('RedEnlace QR verification failed with HTTP status ' . $response['status'] . '.');
+        }
+
+        $body = json_decode($response['body'], true);
+        if (json_last_error() !== JSON_ERROR_NONE || !is_array($body)
+            || !isset($body['success']) || $body['success'] !== true
+            || !isset($body['data']) || !is_array($body['data'])) {
+            throw new RuntimeException('RedEnlace QR verification returned an invalid response.');
+        }
+
+        $data = $body['data'];
+        foreach (array('estado', 'importe', 'moneda', 'numeroReferenciaOriginante', 'numeroReferencia') as $field) {
+            $this->assertRequiredScalar($data, $field);
+        }
+        if (!is_numeric($data['importe'])) {
+            throw new RuntimeException('RedEnlace QR verification returned an invalid amount.');
+        }
+
+        return array(
+            'estado' => (string) $data['estado'],
+            'importe' => (string) $data['importe'],
+            'moneda' => (string) $data['moneda'],
+            'numeroReferenciaOriginante' => (string) $data['numeroReferenciaOriginante'],
+            'numeroReferencia' => (string) $data['numeroReferencia']
+        );
     }
 
     /**
@@ -295,6 +357,44 @@ class RedEnlaceQRClient
             throw new RuntimeException('Unable to request RedEnlace QR generation.');
         }
 
+        return array('status' => $status, 'body' => $body);
+    }
+
+    /**
+     * @param string $url
+     * @param array $headers
+     * @return array
+     */
+    private function sendGetRequest($url, array $headers)
+    {
+        if ($this->httpTransport !== null) {
+            $response = call_user_func($this->httpTransport, $url, $headers, null);
+            return $this->validateTransportResponse($response);
+        }
+        if (!function_exists('curl_init')) {
+            throw new RuntimeException('The PHP cURL extension is required for RedEnlace QR verification.');
+        }
+
+        $ch = curl_init($url);
+        if ($ch === false) {
+            throw new RuntimeException('Unable to initialize the RedEnlace QR verification client.');
+        }
+        curl_setopt_array($ch, array(
+            CURLOPT_HTTPGET => true,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_CONNECTTIMEOUT => self::DEFAULT_CONNECT_TIMEOUT,
+            CURLOPT_TIMEOUT => self::DEFAULT_TIMEOUT,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2
+        ));
+        $body = curl_exec($ch);
+        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($body === false) {
+            throw new RuntimeException('Unable to request RedEnlace QR verification.');
+        }
         return array('status' => $status, 'body' => $body);
     }
 

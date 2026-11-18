@@ -323,15 +323,9 @@ ATC/RedEnlace
 
 ### Configuración de despliegue del webhook
 
-El módulo no guarda el secreto del webhook en formularios nuevos ni en el repositorio. Para habilitar la generación de QR, puede obtener estos valores desde variables de entorno del proceso PHP o desde la configuración cifrada existente de PrestaShop. Las variables de entorno tienen prioridad:
+El Back Office solicita únicamente la URL pública HTTPS del webhook. El módulo genera una vez un secreto aleatorio de 256 bits, lo cifra mediante `RedEnlaceSecretStorage` en la configuración de PrestaShop y nunca lo muestra ni lo incorpora en plantillas o JavaScript. Para cada `/generate`, envía dicho valor usando el nombre de cabecera fijo `X-RedEnlace-Webhook-Token` dentro de `webhook.key/value`; ATC debe devolver exactamente ese header al llamar al endpoint.
 
-| Variable | Uso |
-|---|---|
-| `REDENLACE_WEBHOOK_URL` | URL pública HTTPS que ATC notificará. |
-| `REDENLACE_WEBHOOK_KEY` | Nombre de la cabecera de autenticación configurada para ATC. |
-| `REDENLACE_WEBHOOK_VALUE` | Valor secreto de esa cabecera. |
-
-Estas variables se configuran en el hosting, contenedor o gestor de secretos; no se incluyen en un `.env` versionado. La URL debe apuntar a un webhook implementado y validado antes de activar pagos para clientes.
+El secreto no se deriva de la URL: una URL es pública y predecible, por lo que no aporta autenticación. Al rotar manualmente el secreto en una futura función administrativa, deben mantenerse o conciliarse los QRs aún pendientes que fueron creados con el valor anterior. La URL debe apuntar a un webhook implementado y validado antes de activar pagos para clientes.
 
 ### 9.3. Componentes sugeridos
 
