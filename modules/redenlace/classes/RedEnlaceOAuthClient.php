@@ -8,6 +8,9 @@ class RedEnlaceOAuthClient
 {
     const TOKEN_PATH = '/oauth-client-credentials/access-token?grant_type=client_credentials';
 
+    /** @var array Request-local token cache; never persisted or logged. */
+    private static $tokenCache = array();
+
     private $tokenUrl;
     private $clientId;
     private $clientSecret;
@@ -70,6 +73,11 @@ class RedEnlaceOAuthClient
      */
     public function getAccessToken()
     {
+        $cacheKey = hash('sha256', $this->tokenUrl . "\0" . $this->clientId);
+        if (isset(self::$tokenCache[$cacheKey])
+            && self::$tokenCache[$cacheKey]['expires_at'] > time() + 30) {
+            return self::$tokenCache[$cacheKey]['token'];
+        }
         if (!function_exists('curl_init')) {
             throw new RuntimeException('The PHP cURL extension is required for RedEnlace OAuth.');
         }
@@ -120,6 +128,13 @@ class RedEnlaceOAuthClient
 
         if (!isset($data['access_token']) || !is_string($data['access_token']) || $data['access_token'] === '') {
             throw new RuntimeException('RedEnlace OAuth response does not contain an access token.');
+        }
+
+        if (isset($data['expires_in']) && is_numeric($data['expires_in']) && (int) $data['expires_in'] > 30) {
+            self::$tokenCache[$cacheKey] = array(
+                'token' => $data,
+                'expires_at' => time() + (int) $data['expires_in']
+            );
         }
 
         return $data;

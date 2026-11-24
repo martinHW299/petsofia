@@ -27,6 +27,20 @@ class RedEnlaceTransactionRepository
     }
 
     /**
+     * @param int $limit
+     * @return array
+     */
+    public function findTransactionsForReconciliation($limit = 50)
+    {
+        return Db::getInstance()->executeS(
+            'SELECT * FROM `' . _DB_PREFIX_ . 'redenlace_transaction`'
+            . ' WHERE atc_reference IS NOT NULL AND atc_reference != \'\''
+            . ' AND (status = \'PENDIENTE\' OR order_synced_at IS NULL)'
+            . ' ORDER BY date_upd ASC LIMIT ' . max(1, min(100, (int) $limit))
+        );
+    }
+
+    /**
      * Persists a provider state without allowing a delayed notification to
      * downgrade a payment already confirmed as paid.
      *

@@ -44,6 +44,10 @@ class RedenlaceStatusModuleFrontController extends ModuleFrontController
             $this->respond(409, array('status' => null));
         }
 
+        if ($status === 'PAGADO' && !$this->isOrderPaidAndSynchronized($transaction)) {
+            $this->respond(200, array('status' => 'CONFIRMANDO'));
+        }
+
         $this->respond(200, array('status' => $status));
     }
 
@@ -54,5 +58,17 @@ class RedenlaceStatusModuleFrontController extends ModuleFrontController
         header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
         echo json_encode($body);
         exit;
+    }
+
+    private function isOrderPaidAndSynchronized(array $transaction)
+    {
+        if (empty($transaction['order_synced_at']) || empty($transaction['id_order'])) {
+            return false;
+        }
+        $order = new Order((int) $transaction['id_order']);
+        return Validate::isLoadedObject($order)
+            && (int) $order->id_cart === (int) $transaction['id_cart']
+            && $order->module === $this->module->name
+            && (int) $order->current_state === (int) Configuration::get('PS_OS_PAYMENT');
     }
 }

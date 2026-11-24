@@ -64,6 +64,18 @@ class RedEnlaceWebhookProcessor
         }
 
         $atcReference = $this->extractAtcReference($payload);
+        return $this->reconcile($atcReference);
+    }
+
+    /**
+     * Reconciles a known ATC reference. This is shared by authenticated
+     * webhooks and the server-side scheduled reconciliation job.
+     *
+     * @param string $atcReference
+     * @return array
+     */
+    public function reconcile($atcReference)
+    {
         $transaction = $this->repository->findByAtcReference($atcReference);
         if (!is_array($transaction)) {
             throw new RedEnlaceWebhookException('Webhook transaction was not found.', 404);
@@ -83,9 +95,7 @@ class RedEnlaceWebhookProcessor
         )) {
             throw new RuntimeException('Unable to persist the verified RedEnlace status.');
         }
-        if ($verified['estado'] === 'PAGADO') {
-            $this->orderSynchronizer->synchronize($transaction, $verified);
-        }
+        $this->orderSynchronizer->synchronize($transaction, $verified);
 
         return array('atc_reference' => $atcReference, 'status' => $verified['estado']);
     }
@@ -116,6 +126,7 @@ class RedEnlaceWebhookProcessor
         if (!in_array($verified['estado'], $allowedStates, true)
             || !hash_equals((string) $transaction['atc_reference'], $atcReference)
             || !hash_equals($atcReference, $verified['numeroReferencia'])
+            || !hash_equals((string) $transaction['originating_reference'], $verified['numeroReferenciaOriginante'])
             || !hash_equals((string) $transaction['currency'], $verified['moneda'])
             || $storedAmount === '' || $verifiedAmount === '' || $storedAmount !== $verifiedAmount) {
             throw new RedEnlaceWebhookException('Webhook verification does not match the transaction.', 422);

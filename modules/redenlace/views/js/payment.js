@@ -21,6 +21,12 @@ document.addEventListener('DOMContentLoaded', function () {
     var finished = false;
 
     var showStatus = function (status) {
+        if (status === 'CONFIRMANDO') {
+            statusMessage.textContent = 'Estamos confirmando tu pago. Por favor espera un momento.';
+            statusMessage.hidden = false;
+            payment.className = payment.className.replace(/\s*redenlace-payment--\S+/g, '') + ' redenlace-payment--confirmando';
+            return;
+        }
         var messages = {
             PAGADO: 'Pago confirmado. Serás redirigido a la confirmación de tu pedido.',
             CANCELADO: 'El pago fue cancelado. Puedes volver al checkout para intentar nuevamente.',

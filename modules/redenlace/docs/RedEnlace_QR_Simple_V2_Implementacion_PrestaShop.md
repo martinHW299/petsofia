@@ -428,3 +428,24 @@ Usar índices únicos donde corresponda; no almacenar tokens ni el secreto webho
 ---
 
 **Criterio de aceptación para avanzar a checkout:** generar QR con valores habilitados en Sandbox, almacenar correctamente las dos referencias, verificar estados con la referencia ATC y contar con un contrato confirmado para procesar notificaciones de pago sin acreditar transacciones falsas o duplicadas.
+
+## 15. Conciliación programada del módulo
+
+Además del webhook, el módulo expone un endpoint de conciliación para recuperar
+notificaciones perdidas y completar sincronizaciones que fallaron temporalmente.
+No sustituye al webhook: consulta `verify` exclusivamente desde el servidor.
+
+1. En Back Office, configure un valor aleatorio exclusivo en **Token del Cron**.
+   El módulo lo cifra y nunca vuelve a mostrarlo.
+2. En cPanel, programe un Cron cada 5 minutos (o el intervalo que ATC autorice)
+   que ejecute una petición `POST` HTTPS al endpoint:
+
+```sh
+curl --fail --silent --show-error --max-time 60 -X POST \
+  -H 'X-RedEnlace-Cron-Token: <TOKEN_CONFIGURADO_EN_BACK_OFFICE>' \
+  'https://<dominio>/module/redenlace/cron'
+```
+
+El endpoint procesa como máximo 50 transacciones por ejecución y no devuelve
+datos de pago. Un `200` indica que el proceso se ejecutó; revisar los logs de
+PrestaShop cuando la respuesta reporte fallos.

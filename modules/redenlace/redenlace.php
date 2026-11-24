@@ -20,7 +20,11 @@ class Redenlace extends PaymentModule
     const CONFIG_WEBHOOK_URL = 'REDENLACE_WEBHOOK_URL';
     const CONFIG_WEBHOOK_KEY = 'REDENLACE_WEBHOOK_KEY';
     const CONFIG_WEBHOOK_VALUE = 'REDENLACE_WEBHOOK_VALUE';
+    const CONFIG_CRON_TOKEN = 'REDENLACE_CRON_TOKEN';
     const CONFIG_PENDING_ORDER_STATE = 'REDENLACE_PENDING_ORDER_STATE';
+    const CONFIG_CANCELLED_ORDER_STATE = 'REDENLACE_CANCELLED_ORDER_STATE';
+    const CONFIG_EXPIRED_ORDER_STATE = 'REDENLACE_EXPIRED_ORDER_STATE';
+    const CONFIG_ERROR_ORDER_STATE = 'REDENLACE_ERROR_ORDER_STATE';
     const WEBHOOK_HEADER_NAME = 'X-RedEnlace-Webhook-Token';
     const SANDBOX_BASE_URL = 'https://atcgwapitest.redenlace.com.bo/sandbox/';
     const PRODUCTION_BASE_URL = 'https://api.redenlace.com.bo/';
@@ -29,7 +33,7 @@ class Redenlace extends PaymentModule
     {
         $this->name = 'redenlace';
         $this->tab = 'payments_gateways';
-        $this->version = '0.4.0';
+        $this->version = '0.5.0';
         $this->author = 'LogicaTI';
         $this->need_instance = 0;
         $this->bootstrap = true;
@@ -45,7 +49,7 @@ class Redenlace extends PaymentModule
             && $this->registerHook('paymentOptions')
             && $this->registerHook('paymentReturn')
             && $this->installTransactionTable()
-            && $this->installPendingOrderState()
+            && $this->installOrderStates()
             && Configuration::updateValue(self::CONFIG_ENABLED, false)
             && Configuration::updateValue(self::CONFIG_ENVIRONMENT, 'sandbox')
             && Configuration::updateValue(self::CONFIG_QR_VALIDITY, 300);
@@ -124,6 +128,22 @@ class Redenlace extends PaymentModule
         );
     }
 
+    /**
+     * The token is deliberately separate from the webhook secret because a
+     * scheduler is an administrative caller, not RedEnlace.
+     *
+     * @return string
+     */
+    public function getCronToken()
+    {
+        $storedToken = Configuration::get(self::CONFIG_CRON_TOKEN);
+        if (!is_string($storedToken) || $storedToken === '') {
+            throw new RuntimeException('The RedEnlace reconciliation token is not configured.');
+        }
+
+        return (new RedEnlaceSecretStorage())->decrypt($storedToken);
+    }
+
     public function isPaymentAvailable()
     {
         if (!$this->active || !Configuration::get(self::CONFIG_ENABLED) || !isset($this->context->currency)
@@ -165,27 +185,37 @@ class Redenlace extends PaymentModule
         $establishmentName = trim((string) Tools::getValue(self::CONFIG_ESTABLISHMENT_NAME));
         $validity = trim((string) Tools::getValue(self::CONFIG_QR_VALIDITY));
         $webhookUrl = trim((string) Tools::getValue(self::CONFIG_WEBHOOK_URL));
+        $cronToken = (string) Tools::getValue(self::CONFIG_CRON_TOKEN);
         if (!in_array($environment, array('sandbox', 'production'), true) || $clientId === ''
             || !ctype_digit($establishmentId) || (int) $establishmentId < 1 || $establishmentName === ''
             || !ctype_digit($validity) || (int) $validity < 1 || !$this->isValidHttpsUrl($webhookUrl)) {
             return $this->displayError($this->l('Revisa los campos obligatorios de la configuración.'));
         }
+        if ($cronToken !== '' && (strlen($cronToken) < 32 || strlen($cronToken) > 255)) {
+            return $this->displayError($this->l('El token del Cron debe tener entre 32 y 255 caracteres.'));
+        }
         try {
             $storedSecret = $clientSecret !== '' ? (new RedEnlaceSecretStorage())->encrypt($clientSecret) : Configuration::get(self::CONFIG_CLIENT_SECRET);
+            $storedCronToken = $cronToken !== '' ? (new RedEnlaceSecretStorage())->encrypt($cronToken) : Configuration::get(self::CONFIG_CRON_TOKEN);
         } catch (Exception $exception) {
             return $this->displayError($this->l('No se pudo almacenar el Client Secret de forma segura.'));
         }
         if (!is_string($storedSecret) || $storedSecret === '') {
             return $this->displayError($this->l('El Client Secret es obligatorio.'));
         }
-        if (!Configuration::updateValue(self::CONFIG_ENABLED, $enabled)
-            || !Configuration::updateValue(self::CONFIG_ENVIRONMENT, $environment)
-            || !Configuration::updateValue(self::CONFIG_CLIENT_ID, $clientId)
-            || !Configuration::updateValue(self::CONFIG_CLIENT_SECRET, $storedSecret)
-            || !Configuration::updateValue(self::CONFIG_ESTABLISHMENT_ID, $establishmentId)
-            || !Configuration::updateValue(self::CONFIG_ESTABLISHMENT_NAME, $establishmentName)
-            || !Configuration::updateValue(self::CONFIG_QR_VALIDITY, (int) $validity)
-            || !Configuration::updateValue(self::CONFIG_WEBHOOK_URL, $webhookUrl)) {
+        $configurationSaved = Configuration::updateValue(self::CONFIG_ENABLED, $enabled)
+            && Configuration::updateValue(self::CONFIG_ENVIRONMENT, $environment)
+            && Configuration::updateValue(self::CONFIG_CLIENT_ID, $clientId)
+            && Configuration::updateValue(self::CONFIG_CLIENT_SECRET, $storedSecret)
+            && Configuration::updateValue(self::CONFIG_ESTABLISHMENT_ID, $establishmentId)
+            && Configuration::updateValue(self::CONFIG_ESTABLISHMENT_NAME, $establishmentName)
+            && Configuration::updateValue(self::CONFIG_QR_VALIDITY, (int) $validity)
+            && Configuration::updateValue(self::CONFIG_WEBHOOK_URL, $webhookUrl);
+        if ($cronToken !== '') {
+            $configurationSaved = $configurationSaved
+                && Configuration::updateValue(self::CONFIG_CRON_TOKEN, $storedCronToken);
+        }
+        if (!$configurationSaved) {
             return $this->displayError($this->l('No se pudo guardar la configuración.'));
         }
         return $this->displayConfirmation($this->l('Configuración guardada.'));
@@ -213,16 +243,17 @@ class Redenlace extends PaymentModule
         $environment = Configuration::get(self::CONFIG_ENVIRONMENT) ?: 'sandbox';
         $html = '<form action="' . Tools::safeOutput($actionUrl) . '" method="post"><div class="panel"><h3><i class="icon-qrcode"></i> ' . $this->l('RedEnlace QR Simple') . '</h3>';
         $html .= '<fieldset><legend>' . $this->l('Configuración general') . '</legend><div class="form-group"><label class="control-label">' . $this->l('Habilitar pagos QR') . '</label><div class="radio"><label><input type="radio" name="' . self::CONFIG_ENABLED . '" value="1"' . ($enabled ? ' checked' : '') . '> ' . $this->l('Sí') . '</label></div><div class="radio"><label><input type="radio" name="' . self::CONFIG_ENABLED . '" value="0"' . (!$enabled ? ' checked' : '') . '> ' . $this->l('No') . '</label></div></div><div class="form-group"><label class="control-label required" for="redenlace_environment">' . $this->l('Ambiente') . '</label><select class="form-control" id="redenlace_environment" name="' . self::CONFIG_ENVIRONMENT . '"><option value="sandbox"' . ($environment === 'sandbox' ? ' selected' : '') . '>' . $this->l('Sandbox') . '</option><option value="production"' . ($environment === 'production' ? ' selected' : '') . '>' . $this->l('Producción') . '</option></select></div></fieldset>';
-        $html .= '<fieldset><legend>' . $this->l('Credenciales de RedEnlace') . '</legend>' . $this->textInput(self::CONFIG_CLIENT_ID, 'redenlace_client_id', $this->l('Client ID'), Configuration::get(self::CONFIG_CLIENT_ID), 'text') . $this->textInput(self::CONFIG_CLIENT_SECRET, 'redenlace_client_secret', $this->l('Client Secret'), '', 'password') . '<p class="help-block">' . $this->l('El secreto está cifrado y nunca se muestra. Déjalo vacío para conservar el valor guardado.') . '</p></fieldset>';
+        $html .= '<fieldset><legend>' . $this->l('Credenciales de RedEnlace') . '</legend>' . $this->textInput(self::CONFIG_CLIENT_ID, 'redenlace_client_id', $this->l('Client ID'), Configuration::get(self::CONFIG_CLIENT_ID), 'text') . $this->textInput(self::CONFIG_CLIENT_SECRET, 'redenlace_client_secret', $this->l('Client Secret'), '', 'password', false) . '<p class="help-block">' . $this->l('El secreto está cifrado y nunca se muestra. Déjalo vacío para conservar el valor guardado.') . '</p></fieldset>';
         $html .= '<fieldset><legend>' . $this->l('Datos del establecimiento') . '</legend>' . $this->textInput(self::CONFIG_ESTABLISHMENT_ID, 'redenlace_establishment_id', $this->l('ID del establecimiento'), Configuration::get(self::CONFIG_ESTABLISHMENT_ID), 'number') . $this->textInput(self::CONFIG_ESTABLISHMENT_NAME, 'redenlace_establishment_name', $this->l('Nombre del establecimiento'), Configuration::get(self::CONFIG_ESTABLISHMENT_NAME), 'text') . '</fieldset>';
         $html .= '<fieldset><legend>' . $this->l('Configuración del pago') . '</legend>' . $this->textInput(self::CONFIG_QR_VALIDITY, 'redenlace_qr_validity', $this->l('Vigencia del QR (segundos)'), Configuration::get(self::CONFIG_QR_VALIDITY) ?: 300, 'number') . $this->textInput(self::CONFIG_WEBHOOK_URL, 'redenlace_webhook_url', $this->l('URL pública HTTPS del webhook'), Configuration::get(self::CONFIG_WEBHOOK_URL), 'url') . '<p class="help-block">' . $this->l('El secreto del webhook se genera automáticamente, se guarda cifrado y nunca se muestra.') . '</p><p class="help-block">' . $this->l('Validar los límites permitidos con ATC.') . '</p></fieldset>';
+        $html .= '<fieldset><legend>' . $this->l('Conciliación programada') . '</legend>' . $this->textInput(self::CONFIG_CRON_TOKEN, 'redenlace_cron_token', $this->l('Token del Cron'), '', 'password', false) . '<p class="help-block">' . $this->l('Configura este token en el header X-RedEnlace-Cron-Token del Cron. Déjalo vacío para conservar el valor guardado.') . '</p></fieldset>';
         $html .= '<input type="hidden" name="token" value="' . Tools::safeOutput($token) . '"><div class="panel-footer"><button type="submit" name="submitRedenlaceConfiguration" class="btn btn-default pull-right"><i class="process-icon-save"></i> ' . $this->l('Guardar configuración') . '</button><button type="submit" name="submitRedenlaceOAuthTest" class="btn btn-default"><i class="icon-plug"></i> ' . $this->l('Probar conexión con RedEnlace') . '</button></div></div></form>';
         return $html;
     }
 
-    private function textInput($name, $id, $label, $value, $type)
+    private function textInput($name, $id, $label, $value, $type, $required = true)
     {
-        return '<div class="form-group"><label class="control-label required" for="' . $id . '">' . $label . '</label><input class="form-control" id="' . $id . '" name="' . $name . '" type="' . $type . '" required' . ($type === 'number' ? ' min="1" step="1"' : '') . ' value="' . Tools::safeOutput($value) . '"></div>';
+        return '<div class="form-group"><label class="control-label' . ($required ? ' required' : '') . '" for="' . $id . '">' . $label . '</label><input class="form-control" id="' . $id . '" name="' . $name . '" type="' . $type . '"' . ($required ? ' required' : '') . ($type === 'number' ? ' min="1" step="1"' : '') . ' value="' . Tools::safeOutput($value) . '"></div>';
     }
 
     private function installTransactionTable()
@@ -236,14 +267,27 @@ class Redenlace extends PaymentModule
      *
      * @return bool
      */
+    public function installOrderStates()
+    {
+        return $this->installOrderState(self::CONFIG_PENDING_ORDER_STATE, 'Pendiente de pago QR RedEnlace', '#4169E1')
+            && $this->installOrderState(self::CONFIG_CANCELLED_ORDER_STATE, 'Pago QR RedEnlace cancelado', '#d39e00')
+            && $this->installOrderState(self::CONFIG_EXPIRED_ORDER_STATE, 'Pago QR RedEnlace expirado', '#d39e00')
+            && $this->installOrderState(self::CONFIG_ERROR_ORDER_STATE, 'Error en pago QR RedEnlace', '#c82333');
+    }
+
     public function installPendingOrderState()
     {
-        if ($this->getPendingOrderStateId() > 0) {
+        return $this->installOrderState(self::CONFIG_PENDING_ORDER_STATE, 'Pendiente de pago QR RedEnlace', '#4169E1');
+    }
+
+    private function installOrderState($configurationKey, $name, $color)
+    {
+        if ($this->getOrderStateId($configurationKey) > 0) {
             return true;
         }
 
         $state = new OrderState();
-        $state->color = '#4169E1';
+        $state->color = $color;
         $state->hidden = false;
         $state->delivery = false;
         $state->logable = false;
@@ -257,11 +301,11 @@ class Redenlace extends PaymentModule
         $state->pdf_invoice = false;
         $state->name = array();
         foreach (Language::getLanguages(false) as $language) {
-            $state->name[(int) $language['id_lang']] = 'Pendiente de pago QR RedEnlace';
+            $state->name[(int) $language['id_lang']] = $name;
         }
 
         return $state->add()
-            && Configuration::updateValue(self::CONFIG_PENDING_ORDER_STATE, (int) $state->id);
+            && Configuration::updateValue($configurationKey, (int) $state->id);
     }
 
     /**
@@ -269,7 +313,27 @@ class Redenlace extends PaymentModule
      */
     public function getPendingOrderStateId()
     {
-        $stateId = (int) Configuration::get(self::CONFIG_PENDING_ORDER_STATE);
+        return $this->getOrderStateId(self::CONFIG_PENDING_ORDER_STATE);
+    }
+
+    public function getCancelledOrderStateId()
+    {
+        return $this->getOrderStateId(self::CONFIG_CANCELLED_ORDER_STATE);
+    }
+
+    public function getExpiredOrderStateId()
+    {
+        return $this->getOrderStateId(self::CONFIG_EXPIRED_ORDER_STATE);
+    }
+
+    public function getErrorOrderStateId()
+    {
+        return $this->getOrderStateId(self::CONFIG_ERROR_ORDER_STATE);
+    }
+
+    private function getOrderStateId($configurationKey)
+    {
+        $stateId = (int) Configuration::get($configurationKey);
         if ($stateId < 1) {
             return 0;
         }

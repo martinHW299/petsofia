@@ -11,6 +11,12 @@
     border: 1px solid #c3e6cb;
 }
 
+.redenlace-payment--confirmando .redenlace-payment__status {
+    color: #0c5460;
+    background: #d1ecf1;
+    border: 1px solid #bee5eb;
+}
+
 .redenlace-payment--cancelado .redenlace-payment__status,
 .redenlace-payment--expirado .redenlace-payment__status {
     color: #856404;
