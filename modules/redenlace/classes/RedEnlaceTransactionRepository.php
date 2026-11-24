@@ -53,6 +53,18 @@ class RedEnlaceTransactionRepository
     }
 
     /**
+     * @param int $transactionId
+     * @return bool
+     */
+    public function markOrderSynchronized($transactionId)
+    {
+        return Db::getInstance()->update('redenlace_transaction', array(
+            'order_synced_at' => date('Y-m-d H:i:s'),
+            'date_upd' => date('Y-m-d H:i:s')
+        ), 'id_redenlace_transaction = ' . (int) $transactionId);
+    }
+
+    /**
      * @param int $cartId
      * @param int $orderId
      * @param string $reference

@@ -1,0 +1,25 @@
+.redenlace-payment__status {
+    margin: 1.5rem 0;
+    padding: 1rem;
+    border-radius: 4px;
+    font-weight: 600;
+}
+
+.redenlace-payment--pagado .redenlace-payment__status {
+    color: #155724;
+    background: #d4edda;
+    border: 1px solid #c3e6cb;
+}
+
+.redenlace-payment--cancelado .redenlace-payment__status,
+.redenlace-payment--expirado .redenlace-payment__status {
+    color: #856404;
+    background: #fff3cd;
+    border: 1px solid #ffeeba;
+}
+
+.redenlace-payment--error .redenlace-payment__status {
+    color: #721c24;
+    background: #f8d7da;
+    border: 1px solid #f5c6cb;
+}

@@ -17,7 +17,10 @@ class RedEnlaceWebhookProcessor
     /** @var RedEnlaceTransactionRepository */
     private $repository;
 
-    public function __construct($module, $repository = null)
+    /** @var RedEnlaceOrderSynchronizer */
+    private $orderSynchronizer;
+
+    public function __construct($module, $repository = null, $orderSynchronizer = null)
     {
         if (!$module instanceof Redenlace) {
             throw new InvalidArgumentException('A RedEnlace module instance is required.');
@@ -25,8 +28,13 @@ class RedEnlaceWebhookProcessor
         if ($repository !== null && !$repository instanceof RedEnlaceTransactionRepository) {
             throw new InvalidArgumentException('A RedEnlace transaction repository is required.');
         }
+        if ($orderSynchronizer !== null && !$orderSynchronizer instanceof RedEnlaceOrderSynchronizer) {
+            throw new InvalidArgumentException('A RedEnlace order synchronizer is required.');
+        }
         $this->module = $module;
         $this->repository = $repository === null ? new RedEnlaceTransactionRepository() : $repository;
+        $this->orderSynchronizer = $orderSynchronizer === null
+            ? new RedEnlaceOrderSynchronizer($module, $this->repository) : $orderSynchronizer;
     }
 
     /**
@@ -74,6 +82,9 @@ class RedEnlaceWebhookProcessor
             $verified['estado']
         )) {
             throw new RuntimeException('Unable to persist the verified RedEnlace status.');
+        }
+        if ($verified['estado'] === 'PAGADO') {
+            $this->orderSynchronizer->synchronize($transaction, $verified);
         }
 
         return array('atc_reference' => $atcReference, 'status' => $verified['estado']);

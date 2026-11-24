@@ -20,6 +20,7 @@ class Redenlace extends PaymentModule
     const CONFIG_WEBHOOK_URL = 'REDENLACE_WEBHOOK_URL';
     const CONFIG_WEBHOOK_KEY = 'REDENLACE_WEBHOOK_KEY';
     const CONFIG_WEBHOOK_VALUE = 'REDENLACE_WEBHOOK_VALUE';
+    const CONFIG_PENDING_ORDER_STATE = 'REDENLACE_PENDING_ORDER_STATE';
     const WEBHOOK_HEADER_NAME = 'X-RedEnlace-Webhook-Token';
     const SANDBOX_BASE_URL = 'https://atcgwapitest.redenlace.com.bo/sandbox/';
     const PRODUCTION_BASE_URL = 'https://api.redenlace.com.bo/';
@@ -28,7 +29,7 @@ class Redenlace extends PaymentModule
     {
         $this->name = 'redenlace';
         $this->tab = 'payments_gateways';
-        $this->version = '0.3.0';
+        $this->version = '0.4.0';
         $this->author = 'LogicaTI';
         $this->need_instance = 0;
         $this->bootstrap = true;
@@ -44,6 +45,7 @@ class Redenlace extends PaymentModule
             && $this->registerHook('paymentOptions')
             && $this->registerHook('paymentReturn')
             && $this->installTransactionTable()
+            && $this->installPendingOrderState()
             && Configuration::updateValue(self::CONFIG_ENABLED, false)
             && Configuration::updateValue(self::CONFIG_ENVIRONMENT, 'sandbox')
             && Configuration::updateValue(self::CONFIG_QR_VALIDITY, 300);
@@ -143,7 +145,8 @@ class Redenlace extends PaymentModule
             || trim((string) Configuration::get(self::CONFIG_CLIENT_SECRET)) === ''
             || !ctype_digit((string) Configuration::get(self::CONFIG_ESTABLISHMENT_ID))
             || trim((string) Configuration::get(self::CONFIG_ESTABLISHMENT_NAME)) === ''
-            || (int) Configuration::get(self::CONFIG_QR_VALIDITY) < 1) {
+            || (int) Configuration::get(self::CONFIG_QR_VALIDITY) < 1
+            || $this->getPendingOrderStateId() < 1) {
             throw new RuntimeException('RedEnlace checkout configuration is incomplete.');
         }
         $this->getWebhookConfiguration();
@@ -224,7 +227,54 @@ class Redenlace extends PaymentModule
 
     private function installTransactionTable()
     {
-        return Db::getInstance()->execute('CREATE TABLE IF NOT EXISTS `' . _DB_PREFIX_ . 'redenlace_transaction` (`id_redenlace_transaction` INT UNSIGNED NOT NULL AUTO_INCREMENT, `id_cart` INT UNSIGNED NOT NULL, `id_order` INT UNSIGNED NOT NULL, `originating_reference` VARCHAR(100) NOT NULL, `atc_reference` VARCHAR(100) DEFAULT NULL, `amount` DECIMAL(20,6) NOT NULL, `currency` CHAR(3) NOT NULL, `status` VARCHAR(32) NOT NULL, `expires_at` VARCHAR(64) DEFAULT NULL, `qr_base64` MEDIUMTEXT DEFAULT NULL, `date_add` DATETIME NOT NULL, `date_upd` DATETIME NOT NULL, PRIMARY KEY (`id_redenlace_transaction`), UNIQUE KEY `redenlace_cart` (`id_cart`), UNIQUE KEY `redenlace_originating_reference` (`originating_reference`), UNIQUE KEY `redenlace_atc_reference` (`atc_reference`)) ENGINE=' . _MYSQL_ENGINE_ . ' DEFAULT CHARSET=utf8;');
+        return Db::getInstance()->execute('CREATE TABLE IF NOT EXISTS `' . _DB_PREFIX_ . 'redenlace_transaction` (`id_redenlace_transaction` INT UNSIGNED NOT NULL AUTO_INCREMENT, `id_cart` INT UNSIGNED NOT NULL, `id_order` INT UNSIGNED NOT NULL, `originating_reference` VARCHAR(100) NOT NULL, `atc_reference` VARCHAR(100) DEFAULT NULL, `amount` DECIMAL(20,6) NOT NULL, `currency` CHAR(3) NOT NULL, `status` VARCHAR(32) NOT NULL, `expires_at` VARCHAR(64) DEFAULT NULL, `qr_base64` MEDIUMTEXT DEFAULT NULL, `order_synced_at` DATETIME DEFAULT NULL, `date_add` DATETIME NOT NULL, `date_upd` DATETIME NOT NULL, PRIMARY KEY (`id_redenlace_transaction`), UNIQUE KEY `redenlace_cart` (`id_cart`), UNIQUE KEY `redenlace_originating_reference` (`originating_reference`), UNIQUE KEY `redenlace_atc_reference` (`atc_reference`)) ENGINE=' . _MYSQL_ENGINE_ . ' DEFAULT CHARSET=utf8;');
+    }
+
+    /**
+     * Creates an order state dedicated to QR payments. It is deliberately not
+     * a paid or logable state: QR confirmation occurs asynchronously.
+     *
+     * @return bool
+     */
+    public function installPendingOrderState()
+    {
+        if ($this->getPendingOrderStateId() > 0) {
+            return true;
+        }
+
+        $state = new OrderState();
+        $state->color = '#4169E1';
+        $state->hidden = false;
+        $state->delivery = false;
+        $state->logable = false;
+        $state->invoice = false;
+        $state->send_email = false;
+        $state->module_name = $this->name;
+        $state->unremovable = false;
+        $state->paid = false;
+        $state->shipped = false;
+        $state->pdf_delivery = false;
+        $state->pdf_invoice = false;
+        $state->name = array();
+        foreach (Language::getLanguages(false) as $language) {
+            $state->name[(int) $language['id_lang']] = 'Pendiente de pago QR RedEnlace';
+        }
+
+        return $state->add()
+            && Configuration::updateValue(self::CONFIG_PENDING_ORDER_STATE, (int) $state->id);
+    }
+
+    /**
+     * @return int
+     */
+    public function getPendingOrderStateId()
+    {
+        $stateId = (int) Configuration::get(self::CONFIG_PENDING_ORDER_STATE);
+        if ($stateId < 1) {
+            return 0;
+        }
+        $state = new OrderState($stateId);
+        return Validate::isLoadedObject($state) ? $stateId : 0;
     }
 
     private function canViewConfiguration()

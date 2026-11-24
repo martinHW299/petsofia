@@ -26,6 +26,25 @@ class RedenlacePaymentModuleFrontController extends ModuleFrontController
             if ($transaction['status'] !== 'PENDIENTE' || empty($transaction['qr_base64'])) {
                 throw new RuntimeException('No QR is available for this transaction.');
             }
+            $transaction['expires_at_unix'] = $this->getExpirationTimestamp($transaction);
+            $transaction['expiry_countdown'] = $this->formatDuration(
+                max(0, $transaction['expires_at_unix'] - time())
+            );
+            $transaction['status_url'] = $this->context->link->getModuleLink(
+                $this->module->name,
+                'status',
+                array(),
+                true
+            );
+            $transaction['confirmation_url'] = $this->context->link->getPageLink(
+                'order-confirmation',
+                true,
+                null,
+                'id_cart=' . (int) $transaction['id_cart']
+                . '&id_module=' . (int) $this->module->id
+                . '&id_order=' . (int) $transaction['id_order']
+                . '&key=' . rawurlencode($this->context->customer->secure_key)
+            );
             $this->context->smarty->assign(array('transaction' => $transaction));
         } catch (Exception $exception) {
             $this->logInitiationFailure($exception);
@@ -37,6 +56,21 @@ class RedenlacePaymentModuleFrontController extends ModuleFrontController
     {
         parent::initContent();
         $this->setTemplate('module:redenlace/views/templates/front/payment.tpl');
+    }
+
+    public function setMedia()
+    {
+        parent::setMedia();
+        $this->registerJavascript(
+            'module-redenlace-payment-status',
+            'modules/' . $this->module->name . '/views/js/payment.js',
+            array('position' => 'bottom', 'priority' => 150)
+        );
+        $this->registerStylesheet(
+            'module-redenlace-payment-status',
+            'modules/' . $this->module->name . '/views/css/payment.css',
+            array('media' => 'all', 'priority' => 150)
+        );
     }
 
     private function assertCartContext()
@@ -63,7 +97,7 @@ class RedenlacePaymentModuleFrontController extends ModuleFrontController
         if ($orderId < 1) {
             $this->module->validateOrder(
                 $cart->id,
-                (int) Configuration::get('PS_OS_BANKWIRE'),
+                $this->module->getPendingOrderStateId(),
                 $cart->getOrderTotal(true, Cart::BOTH),
                 $this->module->l('Pago mediante código QR', 'payment'),
                 null,
@@ -109,6 +143,45 @@ class RedenlacePaymentModuleFrontController extends ModuleFrontController
             throw new RuntimeException('Unable to reload the QR transaction.');
         }
         return $transaction;
+    }
+
+    /**
+     * Produces an absolute server-derived expiry time for the browser timer.
+     * Reloading the page therefore never restarts the QR validity period.
+     *
+     * @param array $transaction
+     * @return int Unix timestamp.
+     */
+    private function getExpirationTimestamp(array $transaction)
+    {
+        if (!empty($transaction['expires_at'])) {
+            try {
+                $expiration = new DateTime($transaction['expires_at']);
+                return $expiration->getTimestamp();
+            } catch (Exception $exception) {
+                // Fall back to the locally persisted creation time below.
+            }
+        }
+
+        $createdAt = !empty($transaction['date_add']) ? strtotime($transaction['date_add']) : false;
+        if ($createdAt === false) {
+            throw new RuntimeException('Unable to calculate the QR expiration time.');
+        }
+
+        return $createdAt + (int) Configuration::get(Redenlace::CONFIG_QR_VALIDITY);
+    }
+
+    /**
+     * @param int $seconds
+     * @return string
+     */
+    private function formatDuration($seconds)
+    {
+        $seconds = max(0, (int) $seconds);
+        $hours = floor($seconds / 3600);
+        $minutes = floor(($seconds % 3600) / 60);
+        $remainingSeconds = $seconds % 60;
+        return sprintf('%02d:%02d:%02d', $hours, $minutes, $remainingSeconds);
     }
 
     /**

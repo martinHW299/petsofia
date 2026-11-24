@@ -280,11 +280,11 @@ Content-Type: application/json
 
 | Estado | Significado | Implicación para la tienda |
 |---|---|---|
-| `PENDIENTE` | QR creado, sin pago confirmado | Esperar o volver a consultar |
-| `PAGADO` | Pago confirmado | Registrar pago tras las verificaciones pertinentes |
-| `CANCELADO` | QR cancelado antes de pago | No cobrar con ese QR |
-| `EXPIRADO` | Transcurrió el plazo sin pago | Ofrecer un nuevo QR |
-| `ERROR` | Error de procesamiento | Diagnosticar, no marcar pagado |
+| `PENDIENTE` | QR creado, sin pago confirmado | Mantener el pedido en `Pendiente de pago QR RedEnlace`. |
+| `PAGADO` | Pago confirmado | Tras `verify`, transicionar el pedido una sola vez a `PS_OS_PAYMENT`. |
+| `CANCELADO` | QR cancelado antes de pago | Registrar la cancelación; no cobrar ni finalizar el pedido. |
+| `EXPIRADO` | Transcurrió el plazo sin pago | Registrar expiración y permitir un nuevo intento QR en una fase posterior. |
+| `ERROR` | Error de procesamiento | Registrar para diagnóstico; no marcar pagado. |
 
 El documento distingue entre estados de consulta y los resultados de generación (inicialmente `PENDIENTE` o `ERROR`).
 
@@ -310,7 +310,8 @@ ATC/RedEnlace
        -> validar secreto y payload
        -> verificar transacción con GET /verify
        -> comprobar referencia, moneda e importe
-       -> actualizar pedido de manera idempotente
+       -> guardar el estado QR
+       -> si y solo si es PAGADO, actualizar el pedido de manera idempotente
 ```
 
 ### 9.2. Separación Back Office / Front Office
@@ -334,6 +335,7 @@ El secreto no se deriva de la URL: una URL es pública y predecible, por lo que 
 | `RedEnlaceOAuthClient` | Autenticación, caché y renovación de token |
 | `RedEnlaceQRClient` | Generar, verificar y cancelar QRs |
 | `RedEnlaceTransactionRepository` | Guardar correlación de pedidos y transacciones |
+| `RedEnlaceOrderSynchronizer` | Transicionar el pedido a pago aceptado solo tras `verify=PAGADO` |
 | Controlador de pago Front Office | Iniciar checkout y mostrar QR |
 | Controlador webhook | Recibir y verificar notificaciones |
 | Servicio de conciliación | Consultar estados pendientes ante webhook perdido |
@@ -355,6 +357,7 @@ Tabla transaccional sugerida (prefijo dinámico PrestaShop):
 | Estado ATC | Estado observado / verificado |
 | Fecha expiración | Control del QR vigente |
 | Fecha creación / actualización | Auditoría |
+| Fecha de sincronización de pedido | Recuperar pagos verificados cuyo cambio de estado PrestaShop no terminó |
 | ID evento o huella de notificación | Deduplicación, si existe ID documentalmente disponible; si no, clave idempotente interna |
 
 Usar índices únicos donde corresponda; no almacenar tokens ni el secreto webhook en esta tabla.

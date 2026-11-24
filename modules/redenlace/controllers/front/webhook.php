@@ -5,6 +5,7 @@ if (!defined('_PS_VERSION_')) {
 }
 
 require_once _PS_MODULE_DIR_ . 'redenlace/classes/RedEnlaceTransactionRepository.php';
+require_once _PS_MODULE_DIR_ . 'redenlace/classes/RedEnlaceOrderSynchronizer.php';
 require_once _PS_MODULE_DIR_ . 'redenlace/classes/RedEnlaceWebhookProcessor.php';
 
 /**
